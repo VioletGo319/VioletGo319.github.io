@@ -1,6 +1,6 @@
 import { FACES, OFFICES, actionsAt, HOME_ID, LEGACY_MAP } from "./board";
 import type { Face } from "./board";
-import { assignmentAt, currentEdict, demotionTarget, giftQuote, hasPrepared, rollPreview, type PlanInput } from "./strategy";
+import { assignmentAt, currentEdict, demotionTarget, giftQuote, hasPrepared, investigationQuote, lowerOffice, reviewPreview, rollPreview, type PlanInput } from "./strategy";
 import { EVENTS, STANCES, TOPICS, eventDefinition, type EventId, type DebateBid } from "./encounters";
 export { FACES, OFFICES, actionsAt } from "./board";
 export type { Face, Action } from "./board";
@@ -9,7 +9,7 @@ export interface Player { name: string; pos: number; coins: number; tokenHash: s
   merit: number; risk: number; favor: Record<string, number> }
 export interface Entry { id: number; seat: Seat | null; face?: Face; text: string; at: number }
 export interface Game {
-  rulesVersion: 3;
+  rulesVersion: 4;
   players: Player[]; status: "waiting" | "playing" | "finished";
   turn: Seat; winner: Seat | null; round: number; moves: number; match: number;
   lastRoll: { face: Face; effectiveFace?: Face; reason?: string; seat: Seat; from: number; to: number; at: number } | null;
@@ -29,10 +29,10 @@ export function cleanName(name: unknown): string {
   return value;
 }
 export function makePlayer(name: string, tokenHash = "", now = Date.now()): Player {
-  return { name: cleanName(name), tokenHash, pos: 0, coins: 100, lastSeen: now, merit: 0, risk: 0, favor: {} };
+  return { name: cleanName(name), tokenHash, pos: 0, coins: 20, lastSeen: now, merit: 0, risk: 0, favor: {} };
 }
 export function newGame(player: Player, now = Date.now()): Game {
-  return { rulesVersion: 3, players: [player], status: "waiting", turn: 0, winner: null,
+  return { rulesVersion: 4, players: [player], status: "waiting", turn: 0, winner: null,
     round: 1, moves: 0, match: 1, lastRoll: null, rematch: [], reactions: [],
     strategy: { prep: null, era: 0, eraStart: 0, report: [], debateAfterMove: 0 },
     event: null, debate: null, lastDebate: null,
@@ -89,6 +89,7 @@ export function prepare(game: Game, seat: Seat, input: PlanInput, now = Date.now
   const edict = currentEdict(next);
   let label: string;
   if (input.kind === "gift") {
+    if (p.risk >= 3) throw new Error("嫌疑已达 3，主官暂避往来。先自省或赈济降低嫌疑。");
     const q = giftQuote(next, seat, input.gift!);
     if (q.refused) throw new Error("这位主官清正，拒收珍玩。未扣银两，请换一份礼物或办差。");
     if ((p.favor[q.leader.group] || 0) >= 6) throw new Error("本衙人情已满 6 点，先让主官举荐吧。");
@@ -111,20 +112,25 @@ export function prepare(game: Game, seat: Seat, input: PlanInput, now = Date.now
     log(next, seat, p.name + "办理「" + label + "」，政绩 +" + edict.workMerit + "（上限 8），银两 +" + edict.workCoins + "。", now);
   } else if (input.kind === "petition") {
     if (["court", "home"].includes(OFFICES[p.pos].group)) throw new Error("三公需凭原始「德」晋升，不能请荐。");
+    if (p.risk >= 3) throw new Error("嫌疑已达 3，请荐受阻。先自省或赈济降低嫌疑。");
     spendMerit(p, 3); label = "政绩请荐";
     log(next, seat, p.name + "花 3 政绩请荐：本次若掷出「功」，改按「德」判词行进；其余骰面不变，不退政绩。", now);
   } else if (input.kind === "relief") {
     pay(p, 8); merit(p, 1); risk(p, -2); label = "赈济乡里";
     log(next, seat, p.name + "出资 8 两赈济乡里，政绩 +1、嫌疑 -2（最低为 0）。", now);
+  } else if (input.kind === "reflect") {
+    if (p.risk === 0) throw new Error("目前没有嫌疑，无需自省。");
+    risk(p, -2); merit(p, -1); label = "闭门自省";
+    log(next, seat, p.name + "暂停经营、闭门自省：不花银两，嫌疑 -2、政绩 -1（最低为 0）。", now);
   } else if (input.kind === "support") {
     pay(p, 10); other.coins += 10; merit(p, 1); merit(other, 1); label = "同舟相助";
     log(next, seat, p.name + "把 10 两交给" + other.name + "应急，两人各得 1 政绩。", now);
   } else if (input.kind === "impeach") {
     if (other.risk < 3) throw new Error("对方嫌疑未到 3，证据不足，不能参奏。");
-    spendMerit(p, 2); const before = other.pos, fine = Math.min(12, other.coins);
-    other.coins -= fine; other.pos = demotionTarget(other.pos); risk(other, -3); other.favor = {};
+    spendMerit(p, 2); const before = other.pos, penalty = investigationQuote(other.risk, "impeach"), fine = Math.min(penalty.fine, other.coins);
+    other.coins -= fine; other.pos = lowerOffice(other.pos, penalty.steps); merit(other, -penalty.meritLoss); other.risk = penalty.riskAfter; other.favor = {};
     label = "据实参奏";
-    log(next, seat, p.name + "花 2 政绩参奏：" + other.name + "被罚 " + fine + " 两、降至" + OFFICES[other.pos].department + "·" + OFFICES[other.pos].name + "，嫌疑 -3，人情清空。", now);
+    log(next, seat, p.name + "花 2 政绩参奏：" + other.name + "被罚 " + fine + " 两、降 " + penalty.steps + " 职至" + OFFICES[other.pos].department + "·" + OFFICES[other.pos].name + "，政绩 -" + penalty.meritLoss + "、人情清空、嫌疑降至 " + penalty.riskAfter + "。", now);
     meeting(next, (1 - seat) as Seat, before, now);
   } else if (input.kind === "debate") {
     if (next.moves < next.strategy.debateAfterMove) throw new Error("朝堂才议过一场，稍后再议。");
@@ -143,18 +149,16 @@ function review(game: Game, now: number) {
   const reports: string[] = [];
   // Determine both verdicts from the same snapshot before resolving meeting fees.
   const before = game.players.map(p => p.pos);
-  for (const p of game.players) {
-    let text: string;
-    if (p.risk >= 4) {
-      const fine = Math.min(15, p.coins); p.coins -= fine;
-      p.pos = demotionTarget(p.pos); p.risk = 1; p.favor = {};
-      text = p.name + "嫌疑达 4，考核查办：罚 " + fine + " 两，降至" + OFFICES[p.pos].name + "，人情清空，嫌疑归 1。";
-    } else if (p.merit >= 4) {
-      p.merit -= 4; p.coins += 12;
-      const court = OFFICES[p.pos].group === "court";
-      if (!court) p.pos = actionsAt(p.pos).才.to;
-      text = p.name + "考核卓异：消耗 4 政绩，赏 12 两" + (court ? "；三公留任。" : "，按「才」迁至" + OFFICES[p.pos].name + "。" );
-    } else text = p.name + "平稳留任，政绩与人情继续积累。";
+  const verdicts = game.players.map((_, seat) => reviewPreview(game, seat as Seat));
+  for (const [seat, p] of game.players.entries()) {
+    const verdict = verdicts[seat], group = OFFICES[p.pos].group;
+    p.pos = verdict.to; p.coins += verdict.coins; merit(p, verdict.merit); p.risk = verdict.riskAfter;
+    if (verdict.clearFavor) p.favor = {};
+    else {
+      if (verdict.favorCost) p.favor[group] -= verdict.favorCost;
+      if (verdict.favorDecay) for (const key of Object.keys(p.favor)) p.favor[key] = Math.max(0, p.favor[key] - verdict.favorDecay);
+    }
+    const text = p.name + verdict.title + "：" + verdict.detail + "现有 " + p.coins + " 两、" + p.merit + " 政绩。";
     reports.push(text); log(game, null, text, now);
   }
   // Charge at most one meeting when both are simultaneously reviewed.
@@ -180,6 +184,7 @@ export function roll(game: Game, seat: Seat, face: Face, now = Date.now(), event
   const from = player.pos;
   const resolution = rollPreview(next, seat, face), action = resolution.action;
   if (resolution.favorCost) player.favor[OFFICES[from].group] -= resolution.favorCost;
+  if (resolution.meritCost) spendMerit(player, resolution.meritCost);
   player.pos = action.to;
   player.coins = Math.max(0, player.coins + action.coins);
   if (action.tribute) {
@@ -196,7 +201,8 @@ export function roll(game: Game, seat: Seat, face: Face, now = Date.now(), event
   if (face === "赃" && OFFICES[from].group !== "origin" && !action.tribute) risk(player, 1);
   next.lastRoll = { face, effectiveFace: resolution.effectiveFace, reason: resolution.reason, seat, from, to: player.pos, at: now };
   log(next, seat, player.name + "掷出「" + face + "」" + (resolution.reason ? "，" + resolution.reason +
-    (resolution.favorCost ? "消耗 " + resolution.favorCost + " 人情" : "") + "，按「" + resolution.effectiveFace + "」行进" : "") + "：" + action.label + "。" +
+    (resolution.meritCost ? "，消耗 " + resolution.meritCost + " 政绩" : "") +
+    (resolution.favorCost ? "，消耗 " + resolution.favorCost + " 人情" : "") + (resolution.blocked ? "" : "，按「" + resolution.effectiveFace + "」行进") : "") + "：" + action.label + "。" +
     (face === "功" ? "政绩 +1（上限 8）。" : "") + (face === "赃" && OFFICES[from].group !== "origin" && !action.tribute ? "嫌疑 +1（上限 6）。" : ""), now, face);
   // A newly reached office triggers a meeting; remaining in office never charges twice.
   meeting(next, seat, from, now);
@@ -256,7 +262,11 @@ export function resolveEvent(game: Game, seat: Seat, eventId: string, choiceId: 
   } else if (event.kind === "inspection") {
     if (choiceId === "records" || choiceId === "check") risk(p, -2);
     if (choiceId === "wait") {
-      if (p.risk >= 3) { p.coins = Math.max(0, p.coins - 10); p.pos = demotionTarget(p.pos); p.risk = 0; }
+      if (p.risk >= 3) {
+        const penalty = investigationQuote(p.risk, "inspection");
+        p.coins = Math.max(0, p.coins - penalty.fine); p.pos = lowerOffice(p.pos, penalty.steps);
+        merit(p, -penalty.meritLoss); p.risk = penalty.riskAfter; p.favor = {};
+      }
       else { p.coins += 6; merit(p, 1); }
     }
   }
@@ -324,13 +334,19 @@ export function requestRematch(game: Game, seat: Seat, now = Date.now()): Game {
 }
 
 export function upgradeGame(game: Game): Game {
-  if (game.rulesVersion === 3) return game;
+  if (game.rulesVersion === 4) return game;
   const next = structuredClone(game);
+  if ((game.rulesVersion as number) === 3) {
+    // Keep paid preparation, sealed bids, pending encounters and all earned assets.
+    next.rulesVersion = 4;
+    log(next, null, "新版仕途规则已启用：政绩与人情直接助升，高嫌疑会停升、扣绩并降职。旧局资源和已付筹谋保留；新开局各 20 两。", next.logs[0]?.at ?? 0);
+    return next;
+  }
   if ((game.rulesVersion as number) !== 2) {
     next.players = next.players.map(p => ({ ...p, pos: LEGACY_MAP[p.pos] ?? 0 }));
     if (next.lastRoll) next.lastRoll = { ...next.lastRoll, from: LEGACY_MAP[next.lastRoll.from] ?? 0, to: LEGACY_MAP[next.lastRoll.to] ?? 0 };
   }
-  next.rulesVersion = 3;
+  next.rulesVersion = 4;
   next.players = next.players.map(p => ({ ...p, merit: 0, risk: 0, favor: {} }));
   next.strategy = { prep: null, era: 0, eraStart: next.moves, report: [], debateAfterMove: next.moves };
   next.event = null; next.debate = null; next.lastDebate = null;

@@ -85,7 +85,9 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
             const dest=officeCenter(target),dx=dest.x-source.x,dy=dest.y-source.y;
             const midx=(source.x+dest.x)/2-dy*.12*(i%2?1:-1),midy=(source.y+dest.y)/2+dx*.12*(i%2?1:-1);
             const d="M"+source.x+","+source.y+" Q"+midx+","+midy+" "+dest.x+","+dest.y;
-            return <g key={face} pointerEvents="none" opacity=".83"><path d={d} stroke="#fbf3e2" strokeWidth="6" fill="none"/><path d={d} stroke={colors[face]} strokeWidth="2.7" strokeDasharray={face==="赃"?"8 5":undefined} fill="none" markerEnd={"url(#arrow-"+face+")"}/><circle cx={dest.x} cy={dest.y} r="11" fill={colors[face]}/><text className="route-label" x={dest.x} y={dest.y+4} textAnchor="middle" fill="white" fontSize="12">{face}</text></g>;
+            const preview = game ? rollPreview(game, activeSeat, face) : null;
+            const boosted = preview && preview.effectiveFace !== face;
+            return <g key={face} pointerEvents="none" opacity=".9" className={boosted ? "boosted-route" : ""}><title>{face + (boosted ? "→" + preview.effectiveFace + " · " + preview.reason : "")}</title><path d={d} stroke="#fbf3e2" strokeWidth="6" fill="none"/><path d={d} stroke={colors[face]} strokeWidth={boosted ? 4.5 : 2.7} strokeDasharray={face==="赃"?"8 5":undefined} fill="none" markerEnd={"url(#arrow-"+face+")"}/><circle cx={dest.x} cy={dest.y} r={boosted ? 17 : 11} fill={colors[face]}/><text className="route-label" x={dest.x} y={dest.y+4} textAnchor="middle" fill="white" fontSize={boosted ? "10" : "12"}>{boosted ? face + "→" + preview.effectiveFace : face}</text></g>;
           })}
         </svg>
       </div>

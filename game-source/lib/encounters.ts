@@ -28,7 +28,7 @@ export const EVENTS = [
   { id: "inspection", title: "御史临门", tag: "突击查核", story: "御史突然来查往来账册。你可以主动补充证据，也可接受当场查核。", choices: [
     { id: "records", title: "呈交案牍", detail: "花 1 政绩，嫌疑 -2。", merit: 1, coins: 0 },
     { id: "check", title: "自请复查", detail: "花 8 两，嫌疑 -2。", merit: 0, coins: 8 },
-    { id: "wait", title: "接受查核", detail: "嫌疑 ≥3：罚最多 10 两、降一职、嫌疑归零；否则赏 6 两、政绩 +1。", merit: 0, coins: 0 },
+    { id: "wait", title: "接受查核", detail: "嫌疑 3–5：罚最多 16 两、降一职、政绩 −2、清空人情，嫌疑降至 2；嫌疑 6：罚最多 30 两、降两职、政绩 −4，嫌疑降至 3；低于 3 则赏 6 两、政绩 +1。", merit: 0, coins: 0 },
   ] },
 ] as const;
 export type EventId = typeof EVENTS[number]["id"];
