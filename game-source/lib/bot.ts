@@ -1,19 +1,21 @@
 /** Local opponent. The policy receives the same private projection as a player,
  * never the other player's ledger, sealed bid, or future random dice. */
-import { FACES, OFFICES, prepare, resolveEvent, resolveHassle, roll, submitDebate, type Game, type PublicGame, type Seat } from "./game";
+import { takeCommission, useTactic, discardTactic, FACES, OFFICES, prepare, resolveEvent, resolveHassle, roll, submitDebate, type Game, type PublicGame, type Seat } from "./game";
 import { eventDefinition, randomInt, STANCES, type DebateBid } from "./encounters";
 import { deskOptions } from "./mansion";
 import { currentEdict, giftQuote, hasPrepared, type PlanInput } from "./strategy";
 import { isAcademic } from "./scholar";
 import { silverAt } from "./economy";
 import type { HassleChoice } from "./offices";
+import { cardUnavailable, commissionOffers, type CardId } from "./intrigue";
 
 export const BOT_NAME = "青岚先生";
 export const SOLO_STORE = "tongyou-solo-v1";
 export type BotMove = { action:"roll" } | { action:"prepare"; plan:PlanInput }
   | { action:"event"; id:string; choice:string }
   | { action:"hassle_response"; id:string; choice:HassleChoice }
-  | { action:"debate"; id:string; bid:DebateBid };
+  | { action:"debate"; id:string; bid:DebateBid }
+  | { action:"commission";id:string } | { action:"tactic"|"discard_tactic";id:CardId };
 type Random = (max:number)=>number;
 
 /** Deterministic scheduling guard: human-owned decisions always stop the bot. */
@@ -53,6 +55,22 @@ export function chooseBotMove(view:PublicGame, random:Random=randomInt):BotMove|
     // Uniform stance: no access to the human's unrevealed choice, even if submitted first.
     return {action:"debate",id:view.debate.id,bid:{stance:STANCES[random(3)].id,stake:random(Math.min(2,p.merit)+1)}};
   }
+  const hand=p.intrigue.hand,usable=(id:CardId)=>hand.includes(id)&&!cardUnavailable(view,id);
+  let card:CardId|undefined;
+  if(p.risk>=2&&usable("calm"))card="calm";
+  else if(usable("study"))card="study";
+  else if(p.merit<=4&&usable("resolve"))card="resolve";
+  else if(p.merit>=4&&(p.favor[group]||0)<currentEdict(view).favorCost&&usable("letter"))card="letter";
+  else if((p.coins<silverAt(p.pos,18)||hand.length===4)&&usable("grant"))card="grant";
+  else if(usable("shield"))card="shield";
+  if(card)return {action:"tactic",id:card};
+  if(hand.includes("study")&&(!isAcademic(p.pos)||p.degree||p.learning>=12))return {action:"discard_tactic",id:"study"};
+  if(!p.intrigue.commission&&p.intrigue.acceptedEra!==view.strategy.era&&!(isAcademic(p.pos)&&p.degree)){
+    const offers=commissionOffers(view);
+    const preferred=isAcademic(p.pos)?p.learning<8?"learning":"examination":
+      p.risk>=3?"reputation":p.merit>=4&&p.coins>=silverAt(p.pos,12)&&(p.favor[group]||0)<3?"network":random(100)<30?"journey":"records";
+    return {action:"commission",id:(offers.find(c=>c.id===preferred)||offers[0]).id};
+  }
   if(hasPrepared(view))return {action:"roll"};
   const work=deskOptions(view,"work").filter(o=>!o.unavailable);
   const plan=(id:string)=>work.find(o=>o.id===id)?.plan;
@@ -63,14 +81,17 @@ export function chooseBotMove(view:PublicGame, random:Random=randomInt):BotMove|
     return prepareMove(relief||plan("reflect")!);
   }
   if(isAcademic(p.pos)&&plan("work"))return prepareMove(plan("work")!);
+  const quest=p.intrigue.commission?.id;
+  if(quest==="relief"&&plan("relief"))return prepareMove(plan("relief")!);
+  if(quest==="reputation"&&plan("reflect"))return prepareMove(plan("reflect")!);
   const duels=deskOptions(view,"duel").filter(o=>!o.unavailable);
   // Whether a rival's recommendation is already blocked is private. Choose the
   // two pressure tactics whose legality can be established from public offices.
   const hassles=duels.filter(o=>o.plan.kind==="hassle"&&o.plan.hassle!=="obstruct");
   if(hassles.length&&p.risk===0&&p.merit>=3&&random(100)<18)return prepareMove(hassles[random(hassles.length)].plan);
-  if(duels.some(o=>o.id==="debate")&&random(100)<14)return prepareMove({kind:"debate"});
+  if(duels.some(o=>o.id==="debate")&&(quest==="counsel"||random(100)<14))return prepareMove({kind:"debate"});
   const gifts=deskOptions(view,"gift").filter(o=>!o.unavailable&&p.risk+giftQuote(view,seat,o.plan.gift!).risk<3);
-  if(gifts.length&&(p.favor[group]||0)<currentEdict(view).favorCost&&p.merit>=4&&random(100)<65){
+  if(gifts.length&&(quest==="network"||(p.favor[group]||0)<currentEdict(view).favorCost&&p.merit>=4&&random(100)<65)){
     // Prefer a useful, affordable gift; higher gifts carry the same suspicion as for a human.
     const useful=gifts.filter(o=>giftQuote(view,seat,o.plan.gift!).favor+(p.favor[group]||0)>=currentEdict(view).favorCost);
     return prepareMove((useful[0]||gifts[0]).plan);
@@ -83,6 +104,9 @@ export function chooseBotMove(view:PublicGame, random:Random=randomInt):BotMove|
 /** Execute only after selecting from a PublicGame. No separate bot-only rules. */
 export function applyBotMove(game:Game,seat:Seat,move:BotMove,random:Random=randomInt,now=Date.now()):Game {
   switch(move.action){
+    case "commission":return takeCommission(game,seat,move.id,now);
+    case "tactic":return useTactic(game,seat,move.id,now);
+    case "discard_tactic":return discardTactic(game,seat,move.id,now);
     case "roll":return roll(game,seat,FACES[random(4)],now,random(1000));
     case "prepare":return prepare(game,seat,move.plan,now);
     case "event":return resolveEvent(game,seat,move.id,move.choice,now);

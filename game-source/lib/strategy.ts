@@ -22,10 +22,12 @@ export const PERSONALITIES = [
   { name: "清正", likes: null, description: "收清茶、书画；拒收珍玩，不扣银两。" },
 ] as const;
 export const EDICTS = [
-  { title: "常行政务", detail: "办差得 2 政绩、4 两；本衙 3 人情可将「才」举荐为「德」。", workMerit: 2, workCoins: 4, giftRisk: 0, favorCost: 3 },
-  { title: "兴学修史", detail: "办差额外得 1 政绩，适合准备考核。", workMerit: 3, workCoins: 4, giftRisk: 0, favorCost: 3 },
-  { title: "御史巡察", detail: "本期每次主动送礼额外 +1 嫌疑。", workMerit: 2, workCoins: 4, giftRisk: 1, favorCost: 3 },
-  { title: "荐贤诏下", detail: "本衙举荐只需 2 人情；办差照常。", workMerit: 2, workCoins: 4, giftRisk: 0, favorCost: 2 },
+  { title: "常行政务", detail: "办差得 2 政绩、4 两；本衙 3 人情可将「才」举荐为「德」。", workMerit: 2, workCoins: 4, giftRisk: 0, favorCost: 3, commissionBonus:0 },
+  { title: "兴学修史", detail: "办差额外得 1 政绩，适合准备考核。", workMerit: 3, workCoins: 4, giftRisk: 0, favorCost: 3, commissionBonus:0 },
+  { title: "御史巡察", detail: "本期每次主动送礼额外 +1 嫌疑。", workMerit: 2, workCoins: 4, giftRisk: 1, favorCost: 3, commissionBonus:0 },
+  { title: "荐贤诏下", detail: "本衙举荐只需 2 人情；有赏银的委托额外赏 2 两 × 接取官阶。", workMerit: 2, workCoins: 4, giftRisk: 0, favorCost: 2, commissionBonus:2 },
+  {title:"赈灾急令",detail:"办差得 2 政绩、3 两；有赏银的委托额外赏 4 两 × 接取官阶。",workMerit:2,workCoins:3,giftRisk:0,favorCost:3,commissionBonus:4},
+  {title:"清议兴起",detail:"办差得 3 政绩、3 两；送礼额外 +1 嫌疑，有赏银的委托额外赏 2 两 × 接取官阶。",workMerit:3,workCoins:3,giftRisk:1,favorCost:3,commissionBonus:2},
 ] as const;
 export function currentEdict(game: Game | PublicGame) { return EDICTS[game.strategy.era % EDICTS.length]; }
 export function nextEdict(game: Game | PublicGame) { return EDICTS[(game.strategy.era + 1) % EDICTS.length]; }
@@ -59,6 +61,7 @@ function rawRollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
   const p = ownPlayer(game, seat), o = OFFICES[p.pos];
   const actions = actionsAt(p.pos), base = isAcademic(p.pos)&&p.degree?appointmentAction(p.pos,face):actions[face];
   const unchanged = { action: base, effectiveFace: face, reason: "", favorCost: 0, meritCost: 0, blocked: false };
+  if(face==="赃"&&p.intrigue.shield&&!isAcademic(p.pos)&&!["court","home"].includes(o.group))return {...unchanged,action:{to:p.pos,coins:0,label:"护身文书挡下本次贬职与罚银，仍按赃增加嫌疑",short:"护身留任",kind:"stay"} as Action,reason:"护身文书"};
   // At four suspicion, even a real 德 cannot advance or retire at 太师.
   if (p.risk >= 4 && o.group !== "home" && face !== "赃")
     return { ...unchanged, action: { to: p.pos, coins: 0, label: "停升待查，本次留任且无赏银", short: "停升待查", kind: "stay" } as Action, reason: "嫌疑停升", blocked: true };

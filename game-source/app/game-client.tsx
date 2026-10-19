@@ -7,11 +7,13 @@ import { economyAt, silverAt } from "../lib/economy";
 import ExpandedBoard from "./expanded-board";
 import { authorityAt, exclusiveOffice, OFFICE_SCOPE, type HassleChoice } from "../lib/offices";
 import { BOARD_COUNT, GROUPS, HOME_ID, SOURCES } from "../lib/board";
-import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
+import { discardTactic, takeCommission, abandonCommission, useTactic, actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
 import { hasPrepared, riskBand, type PlanInput } from "../lib/strategy";
 import { randomInt, type DebateBid } from "../lib/encounters";
 import { appointmentAction, isPalaceGate } from "../lib/scholar";
 import { applyBotMove, botMayAct, BOT_NAME, chooseBotMove, SOLO_STORE } from "../lib/bot";
+
+import type { CardId } from "../lib/intrigue";
 
 type Snapshot = { code: string; version: number; seat: Seat; game: PublicGame; serverTime: number };
 type Session = { code: string; token: string };
@@ -117,7 +119,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     const response = await fetch(apiEndpoint + (body ? "" : "?code=" + target.code), {
       method: body ? "POST" : "GET", cache: "no-store",
       credentials: "omit",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "7" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "8" },
       ...(body ? { body: JSON.stringify({ ...body, code: target.code }) } : {}),
       signal: AbortSignal.timeout(12000),
     }).catch(() => { throw new Error("联机服务暂时连接不上，请检查网络后重试；也可先同屏试玩。"); });
@@ -207,6 +209,10 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         if (action === "hassle_response") updateLocal(resolveHassle(current, activeSeat, String(extra.hassleId), String(extra.choice) as HassleChoice));
         if (action === "event") updateLocal(resolveEvent(current, activeSeat, String(extra.eventId), String(extra.choice)));
         if (action === "debate") updateLocal(submitDebate(current, activeSeat, String(extra.debateId), extra.bid as DebateBid | null));
+        if (action === "commission") updateLocal(takeCommission(current,activeSeat,String(extra.commissionId)));
+        if (action === "abandon_commission") updateLocal(abandonCommission(current,activeSeat));
+        if (action === "discard_tactic") updateLocal(discardTactic(current,activeSeat,String(extra.cardId) as CardId));
+        if (action === "tactic") updateLocal(useTactic(current,activeSeat,String(extra.cardId) as CardId));
         if (action === "rematch") updateLocal(requestRematch(requestRematch(current, 0), 1));
       } else if (session && snapshot) {
         const [data] = await Promise.all([api(session, { action, version: snapshot.version, ...extra }),
@@ -255,11 +261,11 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         soloState={solo ? botPaused ? "paused" : botThinking ? "thinking" : "ready" : undefined} onBotPause={()=>setBotPaused(v=>!v)}
         onMove={(action,extra)=>void move(action,extra)} onDetail={setDetail} onInvite={()=>setModal("invite")} onBackup={()=>setModal("backup")}
         locked={isLocal&&!solo&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
-      : <><div className="page-intro"><div className="lobby-scene" aria-hidden="true"/><div className="intro-content"><p className="eyebrow"><span/> 双人古风策略棋游</p><h1>一局浮生，<br/><em>与你共赴青云。</em></h1><p className="intro-copy">从一介布衣，到满朝风云。<br/>你我的下一步，会在哪里相逢？</p><div className="intro-features"><span><Users size={13}/>两人远程</span><span><ShieldCheck size={13}/>各藏私账</span><span><Heart size={13}/>随时续局</span></div></div><div className="intro-stamp">山海有期<br/>同游不散</div></div>
+      : <><div className="page-intro"><div className="lobby-scene" aria-hidden="true"/><div className="intro-content"><p className="eyebrow"><span/> 古风策略棋游</p><h1>一局浮生，<br/><em>与你共赴青云。</em></h1><p className="intro-copy">从一介布衣，到满朝风云。<br/>你我的下一步，会在哪里相逢？</p><div className="intro-features"><span><Users size={13}/>两人远程</span><span><ShieldCheck size={13}/>各藏私账</span><span><Heart size={13}/>随时续局</span></div></div><div className="intro-stamp">山海有期<br/>同游不散</div></div>
         <div className="game-layout lobby-layout"><section className="board-column" aria-label="升官图棋盘"><div className="board-topline"><span>功名 · 地方 · 京官 · 三公</span><button onClick={()=>setModal("rules")}>玩法与改编说明</button></div><ExpandedBoard game={null} activeSeat={0} onDetail={setDetail}/></section>
           <aside className="play-column"><section className="lobby-card">
             <div className="card-overline"><span className="small-line"/> 今夜，与君相约 <span className="small-line"/></div>
-            <h2>棋盘已备，只等你。</h2><p className="muted">与知己同游，或独自会一位棋友。</p>
+            <h2>棋盘已备，只等你。</h2><p className="muted">接一纸委托，藏一手锦囊。与君共赴青云。</p>
             <div className="tabs" role="tablist" aria-label="入席方式">
               <button role="tab" aria-selected={tab === "create"} className={tab === "create" ? "selected" : ""} onClick={() => setTab("create")}>创建雅间</button>
               <button role="tab" aria-selected={tab === "join"} className={tab === "join" ? "selected" : ""} onClick={() => setTab("join")}>赴约入席</button>
@@ -294,7 +300,11 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
         {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{isPalaceGate(detail)&&<p className="notice">科甲格属于殿试定榜区。首次到达须先完成三轮殿试；下方为取得该科甲后的授官去向，赃不降科甲。会元格作为殿试入口，不单列为最终名次。</p>}<p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = isPalaceGate(detail) ? appointmentAction(detail,face) : actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
-          <p><strong>单人对弈。</strong>在门庭选择「单人对弈」，与青岚先生游玩完整棋局。你固定执朱砂，人机执青玉，遵守相同骰面概率、筹谋与升降规则；它只根据自己的私账和公开信息决策，不读取你的嫌疑、政绩或未揭晓论策。人机会自动读书、送礼、掷骰、应试、处理遭遇与廷议；轮到你应对时会等待。府邸右上角可暂停或继续人机，离开页面或查看弹窗时也会暂停。单人局不需要联机服务，保存于当前网站、当前浏览器，清除浏览器数据会丢失；不通过联机密钥转移。单人、同屏和远程存档各自保留，单人新开局会替换上次单人局。</p>
+          <p><strong>谋略新玩法。</strong>在「府务 → 谋略」切换委托、锦囊、朝局。两位开局各得一张清白卷宗；旧棋局升级也会获得，原有私账、殿试、廷议与回合保留。单人、人机、同屏和远程使用同一套规则。委托进度、锦囊和护身状态仅自己可见。</p>
+          <p><strong>私密委托。</strong>每期考核间隔最多接一份，免费且不占筹谋，先接取再行动，不追记此前进度。每份要在自己的第 4 次普通落子结算前完成，殿试三轮不计次数；第 4 次落子后的随机事件已超过期限。到期或放弃不额外扣款，但当期不能重接。功名阶段完成课业、迁格或进入殿试，奖励学识与锦囊，不奖银两或政绩；入仕后可办差、送礼、赈济、自省、赢廷议或历练，按委托目标积进度。护身留任不算迁格，考核调任不算骰子历练。委托赏银按接取官阶锁定，完成时再加当期朝局赏银；其余资源仍有上限。科甲已定者须授官后再接。</p>
+          <p><strong>留一手锦囊。</strong>最多存 4 张，完成委托得指定牌；满囊时只结算其余奖励，不再入牌，也不折银。自己的回合可用一张，不占筹谋，可与一次办差或送礼配合；可随时在自己的非待办回合弃置牌腾位。清白卷宗减 2 嫌疑，经义手札加 2 学识，引荐帖加 2 本衙人情，俸银凭票领 6 两 × 当前官阶，幕僚献策加 2 政绩。使用限制见牌面。护身文书只护下一次普通掷骰：若掷赃，留任且免该骰罚银，仍加嫌疑；其余骰面照常，此骰后保护消失。它不能挡事件、考核或参奏查办，也不能用于功名或三公。待办事件、刁难、廷议及殿试中不能用牌，不能提交论策后临时加投入。</p>
+          <p><strong>朝局预判。</strong>每 6 次普通落子换一期，依次为常行政务、兴学修史、御史巡察、荐贤诏下、赈灾急令、清议兴起。后两期分别改变办差收益和送礼风险；荐贤、赈灾、清议期，有赏银的委托分别额外赏 2、4、2 两 × 接取时官阶。学业委托始终不赏银。谋略页同时显示本期与下期，可决定先攒政绩、修复清誉，还是趁加赏交差。</p>
+          <p><strong>单人对弈。</strong>在门庭选择「单人对弈」，与青岚先生游玩完整棋局。你固定执朱砂，人机执青玉，遵守相同骰面概率、筹谋与升降规则；它只根据自己的私账和公开信息决策，不读取你的嫌疑、政绩或未揭晓论策。人机会自动接委托、用锦囊、读书、送礼、掷骰、应试、处理遭遇与廷议；轮到你应对时会等待。府邸右上角可暂停或继续人机，离开页面或查看弹窗时也会暂停。单人局不需要联机服务，保存于当前网站、当前浏览器，清除浏览器数据会丢失；不通过联机密钥转移。单人、同屏和远程存档各自保留，单人新开局会替换上次单人局。</p>
           <p><strong>各自府邸。</strong>每位玩家持自己的续局密钥进入独立视图。银两、学识、政绩、嫌疑、人情、关系网、筹谋种类与考核私账仅本人可见；对方只能看公开官职、掷骰结果和已经发生的互动。对方的廷议投入与得分不公开，结束后仅揭晓论策和胜负。同屏试玩交接时遮挡画面，但共用设备本身不构成联机级别的数据隔离。</p>
           <p><strong>官阶银两。</strong>按任职分为 1–5 档，府邸顶部标出倍数。初仕 ×1，一方任事 ×2，方面要职 ×3，封疆卿辅 ×4，三公 ×5。下面规则中的金额为基础金额，送礼、赈济、办差收入、掷骰赏罚、考核、事件和廷议赏银均乘本人结算前的档位；具体以按钮和仕途预览为准。援手和资助按付款者档位；同衙见礼、孝敬与三公索贿按收取者档位。每次转账双方金额一致，不足只交现有；自省和免费事件选项始终不收费。旧局已有银两不重算。</p>
           <p><strong>全图。</strong>{BOARD_COUNT} 格，{GROUPS.length - 1} 个功名 / 官署分区，加荣归终点。外层是科举和地方衙门，中层是翰林、都察、九卿与六部，中心是内阁与三公。六部在本作分别设署。</p>
@@ -317,7 +327,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
           <p><strong>胜负。</strong>先荣归者胜。银两最低为 0，不会破产出局；这版不混入四枚普通骰子的对子、穿花等另一套规则。</p>
           <p><strong>手机看图。</strong>全图可放大至 350%，放大后滑动 / 拖动。也可切换「分衙阅读」，选择衙门后逐格查看。搜索官职，或点「定位执子」快速回到棋子。</p>
           <p><strong>远程与续局。</strong>每间两席，自动保存；连续 30 天无操作后过期。双方联网同步，无回合倒计时。换设备时用自己的续局密钥恢复席位。旧版棋局保留回合、已有银两和已获得资源；新开局及再来一局才改为每人 20 两。最早的旧棋盘会映射到新图的相应官职。</p>
-          <div className="notice"><strong>依据与改编边界</strong><p>馆藏资料可核实三层分区、逐格判词、15 种出身与白丁去向；牛津藏本研究记有向上司送见礼。考核、文字狱、廷议提供历史背景，不同图本规则并不一致。高位卡位、同衙刁难、送礼提高晋升、人情、主官性情、定期考核数值、随机事件选择和暗选争辩，均为本作原创机制。文字狱情节不复演具体史案；争辩胜负不代表观点在历史上正确。其余逐格升降、125 格规模和银两也是游戏改编，不宣称完整复刻古图。</p></div>
+          <div className="notice"><strong>依据与改编边界</strong><p>馆藏资料可核实三层分区、逐格判词、15 种出身与白丁去向；牛津藏本研究记有向上司送见礼。考核、文字狱、廷议提供历史背景，不同图本规则并不一致。委托、锦囊、朝局赏银、高位卡位、同衙刁难、送礼提高晋升、人情、主官性情、定期考核数值、随机事件选择和暗选争辩，均为本作原创机制。文字狱情节不复演具体史案；争辩胜负不代表观点在历史上正确。其余逐格升降、125 格规模和银两也是游戏改编，不宣称完整复刻古图。</p></div>
           <div className="sources-list"><h3>查阅资料</h3>{SOURCES.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title} ↗</strong><span>{source.note}</span></a>)}</div>
         </div></> :
         modal === "install" ? <><p className="eyebrow">随身一方棋盘</p><h2>把同游放到桌面。</h2><p className="muted">以手机网页 App 的形式打开，<br/>点图标就能回到棋盘。</p>

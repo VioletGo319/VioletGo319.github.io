@@ -5,15 +5,17 @@ import { HASSLES, exclusiveOffice, hassleAvailability, hierarchy, officeLanding,
 import { EVENTS, STANCES, TOPICS, eventDefinition, type EventId, type DebateBid, type StanceId } from "./encounters";
 import { silverAt } from "./economy";
 import { degreeInfo, examResult, isAcademic, isPalaceGate, legacyDegree, LEARNING_MAX, STUDY_COST, STUDY_GAIN, type Degree } from "./scholar";
+import { CARDS, HAND_LIMIT, cardInfo, cardUnavailable, commissionInfo, commissionOffers, commissionRewardText, newIntrigue, type CardId, type CommissionEvent, type CommissionId, type PrivateIntrigue } from "./intrigue";
+import { economyAt } from "./economy";
 export { FACES, OFFICES, actionsAt } from "./board";
 export type { Face, Action } from "./board";
 export type Seat = 0 | 1;
 export interface Player { name: string; pos: number; coins: number; tokenHash: string; lastSeen: number;
   merit: number; risk: number; favor: Record<string, number>; recommendationBlocked: boolean;
-  learning:number; degree:Degree|null; appointed:boolean }
+  learning:number; degree:Degree|null; appointed:boolean; intrigue:PrivateIntrigue }
 export interface Entry { id: number; seat: Seat | null; face?: Face; text: string; at: number; publicText?: string; privateTexts?: Partial<Record<Seat, string>> }
 export interface Game {
-  rulesVersion: 7;
+  rulesVersion: 8;
   players: Player[]; status: "waiting" | "playing" | "finished";
   turn: Seat; winner: Seat | null; round: number; moves: number; match: number;
   lastRoll: { face: Face; effectiveFace?: Face; reason?: string; occupancyNote?: string; seat: Seat; from: number; to: number; at: number } | null;
@@ -42,10 +44,10 @@ export function cleanName(name: unknown): string {
   return value;
 }
 export function makePlayer(name: string, tokenHash = "", now = Date.now()): Player {
-  return { name: cleanName(name), tokenHash, pos: 0, coins: 20, lastSeen: now, merit: 0, risk: 0, favor: {}, recommendationBlocked: false, learning:0,degree:null,appointed:false };
+  return { name: cleanName(name), tokenHash, pos: 0, coins: 20, lastSeen: now, merit: 0, risk: 0, favor: {}, recommendationBlocked: false, learning:0,degree:null,appointed:false,intrigue:newIntrigue() };
 }
 export function newGame(player: Player, now = Date.now()): Game {
-  return { rulesVersion: 7, players: [player], status: "waiting", turn: 0, winner: null,
+  return { rulesVersion: 8, players: [player], status: "waiting", turn: 0, winner: null,
     round: 1, moves: 0, match: 1, lastRoll: null, rematch: [], reactions: [],
     strategy: { prep: null, era: 0, eraStart: 0, report: [], debateAfterMove: 0, hassleAfterMove: 0 },
     event: null, debate: null, lastDebate: null, hassle: null, exam:null,
@@ -108,6 +110,70 @@ function risk(p: Player, amount: number) { p.risk = Math.min(6, Math.max(0, p.ri
 function pay(p: Player, amount: number) {
   if (p.coins < amount) throw new Error("银两不足，可先直接掷骰推进仕途。");
   p.coins -= amount;
+}
+function commissionProgress(game:Game,seat:Seat,event:CommissionEvent,now:number){
+  const p=game.players[seat],q=p.intrigue.commission;
+  if(!q)return;
+  const def=commissionInfo(q.id);if(def.event!==event)return;
+  q.progress++;
+  if(q.progress<def.goal){p.intrigue.notice=def.title+" · "+q.progress+" / "+def.goal;return;}
+  const reward=commissionRewardText(game,q.id,q.multiplier,currentEdict(game).commissionBonus);
+  if(def.coins)p.coins+=(def.coins+currentEdict(game).commissionBonus)*q.multiplier;
+  merit(p,def.merit);p.learning=Math.min(LEARNING_MAX,p.learning+def.learning);
+  const full=p.intrigue.hand.length>=HAND_LIMIT;
+  if(!full)p.intrigue.hand.push(def.card);
+  p.intrigue.commission=null;p.intrigue.completed++;
+  p.intrigue.notice="委托完成 · "+def.title+"："+reward+(full?"（锦囊已满，此牌未入囊）":"");
+  log(game,seat,p.intrigue.notice,now);
+}
+function finishCommissionTurn(game:Game,seat:Seat,now:number){
+  const p=game.players[seat];p.intrigue.turns++;
+  const q=p.intrigue.commission;
+  if(q&&p.intrigue.turns>=q.deadline){
+    p.intrigue.notice="「"+commissionInfo(q.id).title+"」到期，未完成；不额外扣银或政绩。";
+    p.intrigue.commission=null;log(game,seat,p.intrigue.notice,now);
+  }
+}
+function requireMansionTurn(game:Game,seat:Seat){requireTurn(game,seat);if(game.exam)throw new Error("请先完成殿试与授官，再处理委托或锦囊。");}
+export function takeCommission(game:Game,seat:Seat,id:string,now=Date.now()):Game{
+  requireMansionTurn(game,seat);
+  const p=game.players[seat];
+  if(p.intrigue.commission)throw new Error("先完成或放弃当前委托。");
+  if(p.intrigue.acceptedEra===game.strategy.era)throw new Error("本期已接过委托，下一次考核后再接。");
+  const def=commissionOffers(publicGame(game,seat)).find(c=>c.id===id);
+  if(!def)throw new Error("这份委托已换期，请重新查看。");
+  if(def.academic&&p.degree)throw new Error("科甲已定，授官后再接委托。");
+  const next=structuredClone(game),who=next.players[seat];
+  who.intrigue.commission={id:def.id,progress:0,deadline:who.intrigue.turns+4,multiplier:economyAt(who.pos).multiplier};
+  who.intrigue.acceptedEra=next.strategy.era;who.lastSeen=now;
+  who.intrigue.notice="接下「"+def.title+"」，自己的 4 次普通落子内完成。";
+  log(next,seat,who.intrigue.notice,now);return next;
+}
+export function abandonCommission(game:Game,seat:Seat,now=Date.now()):Game{
+  requireMansionTurn(game,seat);if(!game.players[seat].intrigue.commission)throw new Error("没有待办委托。");
+  const next=structuredClone(game),p=next.players[seat];p.intrigue.commission=null;
+  p.intrigue.notice="已放弃委托，不额外扣款；下一期可再接。";log(next,seat,p.intrigue.notice,now);return next;
+}
+export function useTactic(game:Game,seat:Seat,id:CardId,now=Date.now()):Game{
+  requireMansionTurn(game,seat);
+  if(!CARDS.some(c=>c.id===id))throw new Error("未知锦囊。");
+  const unavailable=cardUnavailable(publicGame(game,seat),id);if(unavailable)throw new Error(unavailable);
+  const next=structuredClone(game),p=next.players[seat],group=OFFICES[p.pos].group;
+  p.intrigue.hand.splice(p.intrigue.hand.indexOf(id),1);p.intrigue.usedAtMove=next.moves;p.lastSeen=now;
+  if(id==="calm")risk(p,-2);
+  if(id==="study")p.learning=Math.min(LEARNING_MAX,p.learning+2);
+  if(id==="letter")p.favor[group]=Math.min(6,(p.favor[group]||0)+2);
+  if(id==="grant")p.coins+=silverAt(p.pos,6);
+  if(id==="resolve")merit(p,2);
+  if(id==="shield")p.intrigue.shield=true;
+  p.intrigue.notice="使用「"+cardInfo(id).name+"」："+cardInfo(id).detail;
+  log(next,seat,p.intrigue.notice,now);return next;
+}
+export function discardTactic(game:Game,seat:Seat,id:CardId,now=Date.now()):Game{
+  requireMansionTurn(game,seat);
+  if(!game.players[seat].intrigue.hand.includes(id))throw new Error("囊中没有此锦囊。");
+  const next=structuredClone(game),p=next.players[seat];p.intrigue.hand.splice(p.intrigue.hand.indexOf(id),1);
+  p.intrigue.notice="已弃置「"+cardInfo(id).name+"」，可留出空位领取新锦囊。";log(next,seat,p.intrigue.notice,now);return next;
 }
 function spendMerit(p: Player, amount: number) {
   if (p.merit < amount) throw new Error("政绩不足，先办差或掷出「功」积累吧。");
@@ -212,6 +278,8 @@ export function prepare(game: Game, seat: Seat, input: PlanInput, now = Date.now
   } else throw new Error("未知的筹谋方式。");
   next.strategy.prep = { move: game.moves, seat, kind: input.kind, label };
   p.lastSeen = now;
+  if(input.kind==="work")commissionProgress(next,seat,isAcademic(p.pos)?"study":"work",now);
+  else if(input.kind==="gift"||input.kind==="relief"||input.kind==="reflect")commissionProgress(next,seat,input.kind,now);
   return next;
 }
 function review(game: Game, now: number) {
@@ -266,6 +334,7 @@ export function roll(game: Game, seat: Seat, face: Face, now = Date.now(), event
   const player = next.players[seat];
   const from = player.pos;
   const resolution = rollPreview(next, seat, face), action = resolution.action;
+  player.intrigue.shield=false;
   if (resolution.favorCost) player.favor[OFFICES[from].group] -= resolution.favorCost;
   if (resolution.meritCost) spendMerit(player, resolution.meritCost);
   player.pos = action.to; player.recommendationBlocked = false;
@@ -291,6 +360,9 @@ export function roll(game: Game, seat: Seat, face: Face, now = Date.now(), event
   // A newly reached office triggers a meeting; remaining in office never charges twice.
   meeting(next, seat, from, now);
   next.strategy.prep = null;
+  if(player.pos!==from)commissionProgress(next,seat,"travel",now);
+  if(isPalaceGate(player.pos)&&!player.degree)commissionProgress(next,seat,"exam",now);
+  finishCommissionTurn(next,seat,now);
   if(isPalaceGate(player.pos)&&!player.degree) {
     next.exam={id:next.match+":"+next.moves+":exam",seat,learning:player.learning,faces:[],result:null,score:null};
     log(next,seat,"会试中式，进入殿试。学识 "+player.learning+" 锁定，连续三轮后定榜。",now,undefined,player.name+"进入殿试，请静候金榜。");
@@ -367,6 +439,8 @@ export function resolveEvent(game: Game, seat: Seat, eventId: string, choiceId: 
   if(!isAcademic(p.pos))p.appointed=true;
   log(next, seat, p.name + "在「" + def.title + "」选择「" + choice.title + "」。现有 " + p.coins + " 两、" + p.merit + " 政绩、" + p.risk + " 嫌疑" + (p.pos !== before ? "，转至" + OFFICES[p.pos].name : "") + "。" + landing.note, now, undefined, p.name + "处理完府中事务" + (p.pos !== before ? "，调任「" + OFFICES[p.pos].name + "」" : "") + "。");
   meeting(next, seat, before, now);
+  if(event.kind==="flood"&&(choiceId==="fund"||choiceId==="organize"))commissionProgress(next,seat,"relief",now);
+  if(event.kind==="inspection"&&(choiceId==="records"||choiceId==="check"))commissionProgress(next,seat,"reflect",now);
   next.event = null; p.lastSeen = now;
   return next;
 }
@@ -424,6 +498,7 @@ export function submitDebate(game: Game, seat: Seat, id: string, bid: DebateBid 
       merit(p, 2); p.coins += silverAt(p.pos, 10); merit(next.players[1-winner], 1);
       const group = OFFICES[p.pos].group;
       if (!["origin", "court", "home"].includes(group)) p.favor[group] = Math.min(6, (p.favor[group] || 0) + 1);
+      commissionProgress(next,winner as Seat,"debate",now);
       text = p.name + "论策获采，赏 10 两、政绩 +2，入仕者本衙人情 +1；另一方政绩 +1。";
     }
     text = next.players[0].name + " " + scores[0] + " 分，" + next.players[1].name + " " + scores[1] + " 分。" + text;
@@ -458,9 +533,11 @@ export function requestRematch(game: Game, seat: Seat, now = Date.now()): Game {
 }
 
 export function upgradeGame(game: Game): Game {
-  if (game.rulesVersion === 7) return game;
+  if (game.rulesVersion === 8) return game;
   const next = structuredClone(game);
   const oldVersion = game.rulesVersion as number;
+  next.players=next.players.map(p=>({...p,intrigue:p.intrigue??newIntrigue()}));
+  if(oldVersion===7){next.rulesVersion=8;return next;}
   if (oldVersion !== 3 && oldVersion !== 4 && oldVersion !==5 && oldVersion!==6) {
     if (oldVersion !== 2) {
       next.players = next.players.map(p => ({ ...p, pos: LEGACY_MAP[p.pos] ?? 0 }));
@@ -471,7 +548,7 @@ export function upgradeGame(game: Game): Game {
     next.event = null; next.debate = null; next.lastDebate = null;
     log(next, null, "旧图已迁移，保留官职、银两与回合；新增谋略资源从 0 起，6 次落子后首次考核。", next.logs[0]?.at ?? 0);
   }
-  next.rulesVersion = 7; next.exam=null;
+  next.rulesVersion = 8; next.exam=null;
   next.players=next.players.map(p=>({...p,learning:Number.isFinite(p.learning)?Math.max(0,Math.min(LEARNING_MAX,p.learning)):0,degree:p.degree??legacyDegree(p.pos),appointed:!!p.appointed||!isAcademic(p.pos)}));
   if(oldVersion===5||oldVersion===6) {
     log(next,null,"读书与殿试规则已启用，保留旧局官职、银两、科甲与待办事务。",next.logs[0]?.at??0,undefined,"新启寒窗学识与殿试；原有棋局、官职和续局密钥保留。");
