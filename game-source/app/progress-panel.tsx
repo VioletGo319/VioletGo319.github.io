@@ -2,7 +2,8 @@
 import { ArrowUpRight, Coins, ShieldAlert, Sparkles } from "lucide-react";
 import { FACES, OFFICES, actionsAt } from "../lib/board";
 import type { PublicGame, Seat } from "../lib/game";
-import { currentEdict, reviewPreview, riskBand, rollPreview, turnsToReview } from "../lib/strategy";
+import { currentEdict, reviewOrder, reviewPreview, riskBand, rollPreview, turnsToReview } from "../lib/strategy";
+import { exclusiveOffice } from "../lib/offices";
 
 export function ResourceBar({ label, value, max, tone, hint }: {
   label: string; value: number; max: number; tone: string; hint?: string;
@@ -22,6 +23,8 @@ export default function ProgressPanel({ game, seat, onDetail }: { game: PublicGa
   const noFavor = ["origin", "court", "home"].includes(office.group);
   return <section className="progress-panel" aria-label="仕途与升迁预览">
     <header className="progress-heading"><div><span className="eyebrow">仕途盘算 · {p.name}</span><h3>{office.name}<span className={"risk-badge " + band.level}>{band.label}</span></h3></div><div className="silver-balance"><Coins size={16}/><strong>{p.coins}</strong><span>两</span></div></header>
+    <p className={"office-eligibility " + (exclusiveOffice(p.pos) ? "exclusive" : "shared")}>{exclusiveOffice(p.pos) ? "中央高位 · 此席由你在任，来者须避位到下一低位。" : "此位可同格 · 地方官分别任职，不成立玩家间同衙关系。"}</p>
+    {p.recommendationBlocked && <p className="occupancy-notice">荐书被压：你下次掷骰不能使用政绩、人情或请荐助力；普通判词与考核照常，掷骰后解除。</p>}
     <div className="career-meters">
       <ResourceBar label="政绩" value={p.merit} max={8} tone="merit" hint={office.group === "court" ? "可用于考绩领赏 · 三公不助升" : p.merit >= 4 ? "已达擢升门槛 · 触发耗 2" : "再攒 " + (4-p.merit) + " 点可擢升"}/>
       <ResourceBar label="本衙人情" value={favor} max={6} tone="favor" hint={noFavor ? "此阶段不设人情举荐" : favor >= edict.favorCost ? "已达举荐门槛 · 触发耗 " + edict.favorCost : "还差 " + (edict.favorCost-favor) + " 点可举荐"}/>
@@ -33,17 +36,18 @@ export default function ProgressPanel({ game, seat, onDetail }: { game: PublicGa
     <div className="route-cards">{outcomes.map(o => {
       const changed = o.effectiveFace !== o.face, dest = OFFICES[o.action.to], base = actionsAt(p.pos)[o.face];
       const cost = [o.meritCost ? o.meritCost + " 政绩" : "", o.favorCost ? o.favorCost + " 人情" : ""].filter(Boolean).join(" + ");
-      return <button key={o.face} className={"route-card " + (o.blocked ? "blocked" : changed ? "boosted" : "") + (o.face === "赃" ? " negative-route" : "")} onClick={() => onDetail(o.action.to)} aria-label={o.face + "，概率四分之一，" + o.action.label + (o.reason ? "，" + o.reason : "")}>
+      return <button key={o.face} className={"route-card " + (o.blocked ? "blocked" : changed ? "boosted" : "") + (o.landing.occupant !== null ? " occupied-route" : "") + (o.face === "赃" ? " negative-route" : "")} onClick={() => onDetail(o.action.to)} aria-label={o.face + "，概率四分之一，" + o.action.label + (o.reason ? "，" + o.reason : "")}>
         <div className="route-card-top"><b>{o.face}{changed && <em>→{o.effectiveFace}</em>}</b><small>25%</small></div>
         <strong>{o.action.to === p.pos ? "留任 · " : ""}{dest.name}</strong><span>{o.reason || o.action.label}</span>
         {changed && <small className="original-route">原判：{OFFICES[base.to].name}</small>}
+        {o.landing.occupant !== null && <small className="route-occupation">原拟{OFFICES[o.landing.intended].name} · {game.players[o.landing.occupant].name}已占位</small>}
         <small className="route-cost">{o.blocked ? "本次无赏银" : cost ? "触发才扣 " + cost : o.reason === "政绩请荐" ? "筹谋时已付 3 政绩" : "无需额外政绩 / 人情"}</small>
       </button>;
     })}</div>
-    <p className="route-disclaimer">预测第一步落子；之后仍可能相逢、考核或遇事。「获助力」表示判词改变，骰面概率始终各 25%。</p>
+    <p className="route-disclaimer">已计算高位卡位，列出实际第一步落点；之后仍可能相逢、考核或遇事。「获助力」表示判词改变，骰面概率始终各 25%。</p>
     <div className={"review-forecast " + review.kind}>
       <div className="review-count"><strong>{turnsToReview(game)}</strong><small>次落子后考核</small></div>
-      <div><h4>{review.kind === "penalty" || review.kind === "warning" ? <ShieldAlert size={15}/> : <Sparkles size={15}/>}当前预估 · {review.title}</h4><p>{review.detail}</p><small>按当前资源计算；下一次落子或遭遇后会更新。{game.strategy.era % 2 === 1 ? "本次考核后另有主官轮调，各衙人情再 −1。" : ""}</small></div>
+      <div><h4>{review.kind === "penalty" || review.kind === "warning" ? <ShieldAlert size={15}/> : <Sparkles size={15}/>}当前预估 · {review.title}</h4><p>{review.detail}</p><small>按当前资源与占位计算，本期先处理{game.players[reviewOrder(game)[0]].name}；下一次落子或遭遇后更新。{game.strategy.era % 2 === 1 ? "本次考核后另有主官轮调，各衙人情再 −1。" : ""}</small></div>
     </div>
     <div className="suspicion-track" aria-label="嫌疑惩罚阶梯">{[["0–2", "正常", p.risk < 3], ["3", "封举荐", p.risk === 3], ["4–5", "停升 · 降一职", p.risk >= 4 && p.risk < 6], ["6", "重罚 · 降两职", p.risk === 6]].map(([n, label, active]) => <div key={String(n)} className={active ? "active" : ""}><b>{n}</b><span>{label}</span>{active && <i>当前</i>}</div>)}</div>
     {p.risk >= 3 && <p className="risk-remedy"><ShieldAlert size={14}/><span>{band.detail} 到「办差经营」选择闭门自省：0 两、嫌疑 −2、政绩 −1，最低为 0。</span></p>}

@@ -1,6 +1,8 @@
 /** Authored strategy expansion. Historical inspirations are cited in board.SOURCES. */
 import { GROUPS, OFFICES, actionsAt, officeId, type Face, type Action } from "./board";
 import type { Game, PublicGame, Seat } from "./game";
+import { demotionTarget, officeLanding, sameAuthority, type HassleKind } from "./offices";
+export { demotionTarget } from "./offices";
 
 export const GIFTS = [
   { id: "tea", name: "清茶一匣", cost: 5, favor: 1, risk: 0, description: "薄礼问候，慢慢攒人情" },
@@ -8,8 +10,8 @@ export const GIFTS = [
   { id: "treasure", name: "珍玩一盒", cost: 20, favor: 3, risk: 2, description: "人情来得快，嫌疑也更重" },
 ] as const;
 export type GiftId = typeof GIFTS[number]["id"];
-export type PlanKind = "gift" | "work" | "petition" | "relief" | "reflect" | "support" | "impeach" | "debate";
-export type PlanInput = { kind: PlanKind; gift?: GiftId };
+export type PlanKind = "gift" | "work" | "petition" | "relief" | "reflect" | "support" | "impeach" | "debate" | "hassle";
+export type PlanInput = { kind: PlanKind; gift?: GiftId; hassle?: HassleKind };
 export const PERSONALITIES = [
   { name: "风雅", likes: "book", description: "偏爱书画，合意礼物额外 +1 人情。" },
   { name: "务实", likes: "tea", description: "偏爱清茶，合意礼物额外 +1 人情。" },
@@ -31,11 +33,13 @@ export function leaderAt(game: Game | PublicGame, seat: Seat) {
   if (["origin", "court", "home"].includes(o.group)) return null;
   const g = GROUPS.find(g => g.key === o.group)!;
   // The highest holder seeks a recommendation from the next authority.
-  const target = o.order < g.ids.length - 1 ? g.ids[g.ids.length - 1]
+  const samePosts = o.group === "temples" ? g.ids.filter(id => OFFICES[id].name.split("寺")[0] === o.name.split("寺")[0]) : g.ids;
+  const top = samePosts[samePosts.length - 1];
+  const target = o.id !== top ? top
     : officeId(o.group === "cabinet" ? "court.2" : "cabinet.5");
   const personality = PERSONALITIES[(GROUPS.indexOf(g) + Math.floor(game.strategy.era / 2)) % PERSONALITIES.length];
   const other = (1 - seat) as Seat;
-  const receiver = game.players[other]?.pos === target ? other : null;
+  const receiver = game.players[other]?.pos === target && sameAuthority(o.id, target) ? other : null;
   return { target, office: OFFICES[target], group: g.key, department: g.name, personality, receiver,
     name: receiver === null ? "署中主官" : game.players[receiver].name };
 }
@@ -48,14 +52,14 @@ export function giftQuote(game: Game | PublicGame, seat: Seat, id: GiftId) {
     risk: gift.risk + currentEdict(game).giftRisk,
     refused: leader.personality.name === "清正" && id === "treasure" };
 }
-export function rollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
+function rawRollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
   const p = game.players[seat], o = OFFICES[p.pos];
   const actions = actionsAt(p.pos), base = actions[face];
   const unchanged = { action: base, effectiveFace: face, reason: "", favorCost: 0, meritCost: 0, blocked: false };
   // At four suspicion, even a real 德 cannot advance or retire at 太师.
   if (p.risk >= 4 && o.group !== "home" && face !== "赃")
-    return { ...unchanged, action: { to: p.pos, coins: 0, label: "停升待查，本次留任且无赏银", short: "停升待查" } as Action, reason: "嫌疑停升", blocked: true };
-  if (p.risk >= 3 || ["court", "home"].includes(o.group)) return unchanged;
+    return { ...unchanged, action: { to: p.pos, coins: 0, label: "停升待查，本次留任且无赏银", short: "停升待查", kind: "stay" } as Action, reason: "嫌疑停升", blocked: true };
+  if (p.risk >= 3 || p.recommendationBlocked || ["court", "home"].includes(o.group)) return unchanged;
   const cost = currentEdict(game).favorCost;
   const recommended = o.group !== "origin" && (p.favor[o.group] || 0) >= cost;
   const changed = (effectiveFace: Face, reason: string, meritCost = 0, favorCost = 0) =>
@@ -67,6 +71,22 @@ export function rollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
   }
   if (face === "才" && recommended) return changed("德", "主官举荐", 0, cost);
   return unchanged;
+}
+export function rollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
+  const pos = game.players[seat].pos;
+  let preview = rawRollPreview(game, seat, face), landing = officeLanding(game, seat, preview.action.to);
+  const base = actionsAt(pos)[face], baseLanding = officeLanding(game, seat, base.to);
+  // Automatic resources are not spent when occupation erases the upgraded route.
+  if ((preview.meritCost || preview.favorCost) && (landing.to === pos || landing.to === baseLanding.to)) {
+    preview = { action: base, effectiveFace: face, reason: "", meritCost: 0, favorCost: 0, blocked: false };
+    landing = baseLanding;
+  }
+  const stopped = landing.occupant !== null && landing.to === pos;
+  const action = landing.occupant === null ? preview.action : { ...preview.action, to: landing.to,
+    coins: stopped ? Math.min(0, preview.action.coins) : preview.action.coins,
+    label: landing.note + (stopped ? "原位候缺，本次无升迁赏银" : ""), short: OFFICES[landing.to].name,
+    kind: stopped ? "stay" as const : preview.action.kind };
+  return { ...preview, action, landing };
 }
 
 export function riskBand(value: number) {
@@ -84,7 +104,7 @@ export function lowerOffice(pos: number, steps: number) {
   return pos;
 }
 /** Shared by the forecast and server settlement; no independent UI rules. */
-export function reviewPreview(game: Game | PublicGame, seat: Seat) {
+function rawReviewPreview(game: Game | PublicGame, seat: Seat) {
   const p = game.players[seat], group = OFFICES[p.pos].group, favorCost = currentEdict(game).favorCost;
   const result = { kind: "steady", title: "平稳留任", to: p.pos, coins: 0, merit: 0, riskAfter: p.risk,
     favorCost: 0, favorDecay: 0, clearFavor: false, detail: "政绩未满 4，继续积累；资源保留。" };
@@ -105,6 +125,32 @@ export function reviewPreview(game: Game | PublicGame, seat: Seat) {
   }
   return result;
 }
+export function reviewOrder(game: Game | PublicGame): Seat[] {
+  const first = ((game.strategy.era + game.match - 1) % 2) as Seat;
+  return [first, (1 - first) as Seat].filter(seat => !!game.players[seat]);
+}
+export function reviewPreviews(game: Game | PublicGame) {
+  const verdicts = game.players.map((_, seat) => rawReviewPreview(game, seat as Seat));
+  const positions = { players: game.players.map(p => ({ ...p })) };
+  const results = verdicts.map(v => ({ ...v, landing: { intended: v.to, to: v.to, occupant: null, note: "" } as ReturnType<typeof officeLanding> }));
+  for (const seat of reviewOrder(game)) {
+    let v = verdicts[seat], landing = officeLanding(positions, seat, v.to);
+    if (v.favorCost) {
+      const from = positions.players[seat].pos, normalTo = actionsAt(from).才.to;
+      const normal = officeLanding(positions, seat, normalTo);
+      if (landing.to === from || landing.to === normal.to) {
+        v = { ...v, title: "考核卓异", to: normalTo, favorCost: 0,
+          detail: "消耗 4 政绩，赏 12 两，按「才」迁至「" + OFFICES[normalTo].name + "」；合荐未增加实际去向，不扣人情。" };
+        landing = normal;
+      }
+    }
+    results[seat] = { ...v, to: landing.to, landing,
+      detail: v.detail + (landing.note ? " 落位时：" + landing.note : "") };
+    positions.players[seat].pos = landing.to;
+  }
+  return results;
+}
+export function reviewPreview(game: Game | PublicGame, seat: Seat) { return reviewPreviews(game)[seat]; }
 const ASSIGNMENTS: Record<string, string> = {
   origin: "寒窗课业", county: "清理县册", state: "修缮乡学", prefecture: "巡查粮仓", capitalCounty: "巡检坊市",
   capitalPrefecture: "疏理京畿", finance: "核实钱粮", justice: "复核刑案", province: "督办河工", hanlin: "修史校书",
@@ -112,9 +158,3 @@ const ASSIGNMENTS: Record<string, string> = {
   war: "核验军籍", penalty: "复审疑案", works: "修渠筑堤", cabinet: "拟议章奏", court: "辅理朝政",
 };
 export function assignmentAt(pos: number) { return ASSIGNMENTS[OFFICES[pos].group] || "办理公事"; }
-export function demotionTarget(pos: number) {
-  const o = OFFICES[pos];
-  if (o.order > 0) return officeId(o.group + "." + (o.order - 1));
-  if (o.group === "court") return officeId("cabinet.5");
-  return actionsAt(pos).赃.to;
-}

@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { Crosshair, Minus, Plus, Search, Maximize2, Route, X } from "lucide-react";
 import { BOARD_COUNT, BOARD_HEIGHT, BOARD_WIDTH, FACES, GROUPS, HOME_ID, OFFICES, actionsAt, officeCenter, officeRect } from "../lib/board";
 import type { PublicGame, Seat } from "../lib/game";
+import { exclusiveOffice, OFFICE_SCOPE } from "../lib/offices";
 import { rollPreview } from "../lib/strategy";
 const colors = { 德:"#a6372b", 才:"#386d66", 功:"#987232", 赃:"#726a65" };
 function Official({ x, y }: { x:number;y:number }) {
@@ -36,6 +37,7 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
   const matches=query.trim()?OFFICES.filter(o=>(o.department+o.name).includes(query.trim())).slice(0,12):[];
   return <div className="expanded-board">
     <div className="atlas-heading"><div><span className="atlas-title">升官全图</span><span className="edition-seal">群衙本</span></div><span>{BOARD_COUNT} 格 · 三层分区</span></div>
+    <details className="occupation-legend"><summary>高位有主 · 占位规则</summary><p>{OFFICE_SCOPE}这些格位一职一人；被占时退至下一低位。地方官及其余低阶职位可同格，地方双方不算同衙。</p></details>
     <div className="atlas-toolbar">
       <div className="atlas-tabs"><button className={mode==="map"?"selected":""} onClick={()=>setMode("map")}>全图</button><button className={mode==="read"?"selected":""} onClick={()=>setMode("read")}>分衙阅读</button></div>
       <button onClick={()=>{setZoom(1);setMode("map");viewport.current?.scrollTo(0,0);}} title="适应全图" aria-label="适应全图"><Maximize2 size={15}/></button>
@@ -67,16 +69,18 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
           </g>)}
           {OFFICES.map(o=>{
             const r=officeRect(o.id),a=actionsAt(o.id),players=game?.players.map((p,seat)=>({...p,seat})).filter(p=>p.pos===o.id)||[];
+            const occupied=exclusiveOffice(o.id)&&players.length>0;
             const isCourt=o.group==="court",isHome=o.id===HOME_ID;
             const compact=r.h<52, narrow=r.w<78,vertical=!compact&&(narrow||r.h>r.w*1.25);
             const here=pos===o.id, dest=showRoutes&&FACES.some(f=>actions[f].to===o.id&&o.id!==pos);
-            return <g key={o.id} className={"map-office "+(here?"selected ":"")+(game?.lastRoll?.to===o.id?"landed ":"")+(isCourt?"court-office ":"")} role="button" tabIndex={0} aria-label={o.department+" "+o.name+"，查看四种判词"} onClick={()=>onDetail(o.id)} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onDetail(o.id);}}}>
-              <rect x={r.x+.8} y={r.y+.8} width={r.w-1.6} height={r.h-1.6} fill={here?"#e5c99680":players.length?"#cfb6864d":dest?"#dfe8d944":"transparent"} stroke={here?"#8b4931":"#bb896d"} strokeWidth={here?3:.8}/>
+            return <g key={o.id} className={"map-office "+(here?"selected ":"")+(game?.lastRoll?.to===o.id?"landed ":"")+(isCourt?"court-office ":"")} role="button" tabIndex={0} aria-label={o.department+" "+o.name+(occupied?"，在任："+players[0].name+"，此位独占":"，"+(exclusiveOffice(o.id)?"独占空位":"允许同格"))+"，查看四种判词"} onClick={()=>onDetail(o.id)} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onDetail(o.id);}}}>
+              <rect x={r.x+.8} y={r.y+.8} width={r.w-1.6} height={r.h-1.6} fill={here?"#e5c99680":occupied?"#c5866940":players.length?"#cfb6864d":dest?"#dfe8d944":"transparent"} stroke={here?"#8b4931":occupied?"#a3392c":"#bb896d"} strokeWidth={here?3:occupied?2.5:.8}/>
               {isHome?<><text x={r.x+r.w/2} y={r.y+27} className="home-label" textAnchor="middle">荣 归 故 里</text><text x={r.x+r.w/2} y={r.y+46} textAnchor="middle" className="home-subtitle">唯太师逢德 · 功成归乡</text></>:
               isCourt?<><text x={r.x+r.w/2} y={r.y+36} textAnchor="middle" className="court-name">{o.name}</text><g style={{color:"#a24731"}}><Official x={r.x+r.w/2} y={r.y+108}/></g><text x={r.x+r.w/2} y={r.y+211} textAnchor="middle" className="court-rule">德 · {a.德.short}</text><text x={r.x+r.w/2} y={r.y+233} textAnchor="middle" className="court-rule muted-rule">才功赃 · 索贿留任</text></>:
-              compact?<><text x={r.x+8} y={r.y+r.h/2+5} className="compact-name">{o.name}</text><text x={r.x+r.w-7} y={r.y+r.h/2+4} textAnchor="end" className="compact-rules">德↑ 才↗ 功留</text></>:
+              compact?<><text x={r.x+8} y={r.y+r.h/2+5} className="compact-name">{o.name}</text><text x={r.x+r.w-(occupied?32:7)} y={r.y+r.h/2+4} textAnchor="end" className="compact-rules">{occupied?"高位在任":"德↑ 才↗ 功留"}</text></>:
               vertical?<><text x={r.x+r.w/2} y={r.y+14} className="vertical-name" style={{writingMode:"vertical-rl",fontSize:o.group==="cabinet"?17:Math.min(21,(r.h-60)/o.name.length-1),letterSpacing:1}}>{o.name}</text>{o.group==="cabinet"?<text x={r.x+r.w/2} y={r.y+r.h-8} textAnchor="middle" className="micro-rule">点看判词</text>:FACES.map((f,i)=><text key={f} x={r.x+5} y={r.y+r.h-40+i*10} className="micro-rule">{f}·{a[f].short.length>5?a[f].short.slice(0,4)+"…":a[f].short}</text>)}</>:
               <><text x={r.x+r.w/2} y={r.y+Math.min(28,r.h*.38)} textAnchor="middle" className="horizontal-name">{o.name}</text>{FACES.map((f,i)=><text key={f} x={r.x+8+(i%2)*(r.w/2)} y={r.y+r.h-21+Math.floor(i/2)*12} className="micro-rule">{f}·{a[f].short.length>5?a[f].short.slice(0,4)+"…":a[f].short}</text>)}</>}
+              {occupied&&!compact&&<g aria-hidden="true"><rect x={r.x+3} y={r.y+3} width="16" height="15" rx="2" fill="#a3392c"/><text x={r.x+11} y={r.y+14} textAnchor="middle" style={{fill:"#fff7e7",fontSize:10}}>占</text></g>}
               {players.map((p,i)=><g key={p.seat} transform={"translate("+(r.x+r.w-13-i*25)+","+(r.y+14)+")"} className="map-token"><circle r="12" fill={p.seat===0?"#a3392c":"#386d66"} stroke="#fff6df" strokeWidth="2"/><text textAnchor="middle" y="4" fill="#fff6df" fontSize="11">{p.seat===0?"朱":"青"}</text></g>)}
             </g>;
           })}
@@ -93,7 +97,7 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
       </div>
     </div>:<div className="department-reader">
       <div className="reader-heading"><h3>{group.name}</h3><span>{group.ids.length} 个格位</span></div><p>{group.description}</p>
-      <div className="reader-cells">{group.ids.map(id=>{const o=OFFICES[id],a=actionsAt(id);return <button key={id} className={id===pos?"here":""} onClick={()=>onDetail(id)}><strong>{o.name}{game?.players.filter(p=>p.pos===id).map((p,i)=><i key={i}>{p.name}</i>)}</strong><div>{FACES.map(f=><span key={f}><b style={{color:colors[f]}}>{f}</b>{a[f].label}</span>)}</div></button>;})}</div>
+      <div className="reader-cells">{group.ids.map(id=>{const o=OFFICES[id],a=actionsAt(id);return <button key={id} className={id===pos?"here":""} onClick={()=>onDetail(id)}><strong>{o.name}{exclusiveOffice(id)&&<small className="reader-exclusive">独占</small>}{game?.players.filter(p=>p.pos===id).map((p,i)=><i key={i}>{p.name}</i>)}</strong><div>{FACES.map(f=><span key={f}><b style={{color:colors[f]}}>{f}</b>{a[f].label}</span>)}</div></button>;})}</div>
     </div>}
     <div className="atlas-bottom"><span>{mode==="map"?(zoom===1?"全图总览 · 放大或切换「分衙阅读」":"滑动 / 拖动棋盘 · 点官职看判词"):"逐格判词 · 点击查看去向与依据"}</span><button onClick={()=>focusOffice(pos)}><Crosshair size={13}/>{game?"定位执子":"定位白丁"}</button></div>
     {game&&<div className="position-strip">{game.players.map((p,seat)=><button key={seat} onClick={()=>focusOffice(p.pos)}><i className={"legend "+(seat===1?"teal":"red")}/><span>{p.name}</span><strong>{OFFICES[p.pos].department} · {OFFICES[p.pos].name}</strong><Crosshair size={12}/></button>)}</div>}

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Gift, ScrollText, Swords } from "lucide-react";
 import type { PublicGame, Seat } from "../lib/game";
 import { GROUPS, OFFICES } from "../lib/board";
+import { HASSLES, hassleAvailability, hierarchy } from "../lib/offices";
 import { GIFTS, assignmentAt, currentEdict, giftQuote, hasPrepared, leaderAt, nextEdict, turnsToReview, investigationQuote, riskBand, type GiftId, type PlanInput } from "../lib/strategy";
 
 export default function StrategyPanel({ game, seat, enabled, onPlan }: {
@@ -14,6 +15,7 @@ export default function StrategyPanel({ game, seat, enabled, onPlan }: {
   const leader = leaderAt(game, seat), edict = currentEdict(game), used = hasPrepared(game);
   const penalty = investigationQuote(other.risk, "impeach");
   const canRecommend = p.risk < 3;
+  const relation = hierarchy(game), hassleReason = hassleAvailability(game, seat);
   const can = enabled && !used, quote = leader ? giftQuote(game, seat, selected) : null;
   const reason = used ? "本回合已办「" + game.strategy.prep!.label + "」，接下来掷骰。" : enabled ? "掷骰前可任选一项；也可以直接掷骰。" : "轮到你时，可先筹谋一次再掷骰。";
   return <section className="strategy-card" id="strategy">
@@ -42,11 +44,13 @@ export default function StrategyPanel({ game, seat, enabled, onPlan }: {
       {Object.entries(p.favor).some(([,n]) => n > 0) && <details className="favor-ledger"><summary>我的各衙人情簿</summary>{Object.entries(p.favor).filter(([,n]) => n > 0).map(([g,n]) => <p key={g}><span>{GROUPS.find(x => x.key === g)?.name}</span><b>{n} / 6</b></p>)}</details>}
     </div> : tab === "work" ? <div className="strategy-pane action-menu">
       <button disabled={!can} onClick={() => onPlan({kind:"work"})}><b>{assignmentAt(p.pos)}</b><span>无需银两 · 政绩 +{edict.workMerit}，银两 +{edict.workCoins}</span></button>
-      <button disabled={!can || !canRecommend || p.merit < 3 || ["court","home"].includes(o.group)} onClick={() => onPlan({kind:"petition"})}><b>政绩请荐 <small>3 政绩</small></b><span>本次掷「功」改按「德」；无需达到 4 政绩门槛。其他结果不变、不退款，嫌疑 ≥3 或三公不可用。</span></button>
+      <button disabled={!can || !canRecommend || p.recommendationBlocked || p.merit < 3 || ["court","home"].includes(o.group)} onClick={() => onPlan({kind:"petition"})}><b>政绩请荐 <small>3 政绩</small></b><span>本次掷「功」改按「德」；无需达到 4 政绩门槛。其他结果不变、不退款，嫌疑 ≥3、荐书被压或三公不可用。</span></button>
       <button disabled={!can || p.risk === 0} onClick={() => onPlan({kind:"reflect"})}><b>闭门自省 <small>0 两</small></b><span>嫌疑 -2、政绩 -1（最低为 0）。用一次筹谋换回清誉。</span></button>
       <button disabled={!can || p.coins < 8} onClick={() => onPlan({kind:"relief"})}><b>赈济乡里 <small>8 两</small></b><span>政绩 +1，嫌疑 -2</span></button>
       <button disabled={!can || p.coins < 10} onClick={() => onPlan({kind:"support"})}><b>同舟相助 <small>10 两</small></b><span>转给{other.name} 10 两，双方政绩各 +1</span></button>
     </div> : <div className="strategy-pane action-menu">
+      <div className="hassle-menu-heading"><b>同衙施压</b><p>{hassleReason || "你是" + relation?.department + "上级。发起花 1 政绩、嫌疑 +1，占用本回合筹谋；下级可以反制。"}</p></div>
+      {relation && HASSLES.map(h => <button key={h.id} disabled={!can || !!hassleReason || (h.id === "obstruct" && other.recommendationBlocked)} onClick={() => onPlan({kind:"hassle",hassle:h.id})}><b>{h.title}<small>1 政绩 · 嫌疑 +1</small></b><span>{h.detail}</span></button>)}
       <button disabled={!can || game.moves < game.strategy.debateAfterMove} onClick={() => onPlan({kind:"debate"})}><b>发起朝堂争辩</b><span>双方暗选论策与政绩投入，再同时揭晓。胜者赏银 10 两、政绩 +2；每 6 次落子最多发起一次。</span>{game.moves < game.strategy.debateAfterMove && <small>再落子 {game.strategy.debateAfterMove - game.moves} 次可发起</small>}</button>
       <button disabled={!can || p.merit < 2 || other.risk < 3} onClick={() => onPlan({kind:"impeach"})}><b>据实参奏 <small>2 政绩</small></b><span>{other.name}当前嫌疑 {other.risk} / 6。达到 3 可查办：按 TA 当前嫌疑，罚最多 {penalty.fine} 两、降 {penalty.steps} 职、政绩 -{penalty.meritLoss}、人情清空，嫌疑降至 {penalty.riskAfter}。</span></button>
       <p className="strategy-help">未入仕也可作为策士献策。输掉争辩不降职，依然可以继续掷骰。</p>

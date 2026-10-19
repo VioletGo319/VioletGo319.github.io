@@ -4,9 +4,11 @@ import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Download, H
 import ExpandedBoard from "./expanded-board";
 import StrategyPanel from "./strategy-panel";
 import ProgressPanel, { ResourceBar } from "./progress-panel";
+import OfficePanel from "./office-panel";
+import { authorityAt, exclusiveOffice, OFFICE_SCOPE, type HassleChoice } from "../lib/offices";
 import EncounterPanel from "./encounter-panel";
 import { BOARD_COUNT, GROUPS, HOME_ID, SOURCES } from "../lib/board";
-import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
+import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
 import { hasPrepared, riskBand, type PlanInput } from "../lib/strategy";
 import { randomInt, type DebateBid } from "../lib/encounters";
 
@@ -42,8 +44,8 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   const dialogRef = useRef<HTMLDialogElement>(null);
   const game: PublicGame | null = local ? publicGame(local) : snapshot?.game ?? null;
   const isLocal = !!local, inGame = !!game;
-  const activeSeat: Seat = isLocal && game ? game.event?.seat ?? (game.debate && game.debate.ready[game.turn] ? (1 - game.turn) as Seat : game.turn) : snapshot?.seat ?? 0;
-  const canRoll = !!game && game.status === "playing" && !game.event && !game.debate && (isLocal || game.turn === snapshot?.seat);
+  const activeSeat: Seat = isLocal && game ? game.hassle?.junior ?? game.event?.seat ?? (game.debate && game.debate.ready[game.turn] ? (1 - game.turn) as Seat : game.turn) : snapshot?.seat ?? 0;
+  const canRoll = !!game && game.status === "playing" && !game.event && !game.debate && !game.hassle && (isLocal || game.turn === snapshot?.seat);
   function notify(message: string) {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -87,7 +89,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     const response = await fetch(apiEndpoint + (body ? "" : "?code=" + target.code), {
       method: body ? "POST" : "GET", cache: "no-store",
       credentials: "omit",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "4" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "5" },
       ...(body ? { body: JSON.stringify({ ...body, code: target.code }) } : {}),
       signal: AbortSignal.timeout(12000),
     }).catch(() => { throw new Error("联机服务暂时连接不上，请检查网络后重试；也可先同屏试玩。"); });
@@ -165,6 +167,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         await new Promise(resolve => setTimeout(resolve, action === "roll" ? 650 : 0));
         if (action === "roll") setLocal(roll(local, local.turn, FACES[randomInt(4)], Date.now(), randomInt(1000)));
         if (action === "prepare") setLocal(prepare(local, activeSeat, extra.plan as PlanInput));
+        if (action === "hassle_response") setLocal(resolveHassle(local, activeSeat, String(extra.hassleId), String(extra.choice) as HassleChoice));
         if (action === "event") setLocal(resolveEvent(local, activeSeat, String(extra.eventId), String(extra.choice)));
         if (action === "debate") setLocal(submitDebate(local, activeSeat, String(extra.debateId), extra.bid as DebateBid | null));
         if (action === "rematch") setLocal(requestRematch(requestRematch(local, 0), 1));
@@ -262,6 +265,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
             </details>
             <button className="restore-button" onClick={() => setModal("restore")}>换了手机？用续局密钥找回</button>
           </section> : <>
+            {game.status === "playing" && <OfficePanel game={game} seat={activeSeat} enabled={!busy && (isLocal || connection === "connected")} isLocal={isLocal} onMove={(action, extra) => void move(action, extra)}/>}
             {game.status === "playing" && <EncounterPanel key={game.event?.id || (game.debate?.id || "last") + ":" + activeSeat} game={game} seat={activeSeat} isLocal={isLocal} enabled={!busy && (isLocal || connection === "connected")} onMove={(action,extra) => void move(action,extra)}/>}
             <section className={"turn-card " + (game.status === "finished" ? "finished-card" : "")}>
               {game.status === "waiting" ? <>
@@ -278,16 +282,17 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
                 {!isLocal && game.rematch.length > 0 && !game.rematch.includes(activeSeat) && <p className="card-footnote">对方已发来再战邀请。</p>}
               </> : <>
                 <span className={"pill " + (canRoll ? "" : "quiet")}><span className="tiny-dot"/>{canRoll ? "轮到" + (isLocal ? game.players[game.turn].name : "你") + "了" : "静候 " + game.players[game.turn].name}</span>
-                <h2>{game.event ? "先解眼前事。" : game.debate ? "朝堂上，见真章。" : canRoll ? "一掷，赴青云。" : "且饮茶，候佳音。"}</h2>
+                <h2>{game.hassle ? "同衙风波，如何应对？" : game.event ? "先解眼前事。" : game.debate ? "朝堂上，见真章。" : canRoll ? "一掷，赴青云。" : "且饮茶，候佳音。"}</h2>
                 <div className={"dice-wrap " + (rolling ? "is-rolling" : "")}><div className={"dice " + (game.lastRoll?.face === "赃" ? "bad-face" : "")}><span>{rolling ? "运" : game.lastRoll?.face || "德"}</span><i/><i/><i/><i/></div></div>
                 <p className="last-roll" aria-live="polite">{rolling ? "古骰轻落，静候天意…" : game.lastRoll ? game.players[game.lastRoll.seat].name + "掷出「" + game.lastRoll.face + "」" + (game.lastRoll.reason ? " · " + game.lastRoll.reason + (game.lastRoll.reason === "嫌疑停升" ? "" : "按「" + game.lastRoll.effectiveFace + "」") : "") : "德才功赃，四面各有机缘"}</p>
+                {game.lastRoll?.occupancyNote && <p className="occupancy-notice">{game.lastRoll.occupancyNote}</p>}
                 {canRoll && !hasPrepared(game) && <a className="plan-shortcut" href="#strategy">可先筹谋一次：送礼 / 办差 / 朝堂争辩 ↓</a>}
-                <button className="primary-button roll-button" disabled={!canRoll || busy || (!isLocal && connection !== "connected")} onClick={() => move("roll")}>{rolling ? <LoaderCircle size={18} className="spin"/> : <><span className="dice-icon">◇</span>{game.event ? "先选择事件应对" : game.debate ? "等待论策揭晓" : canRoll ? hasPrepared(game) ? "筹谋已定 · 掷骰" : "直接掷骰行运" : "等待对方掷骰"}</>}</button>
+                <button className="primary-button roll-button" disabled={!canRoll || busy || (!isLocal && connection !== "connected")} onClick={() => move("roll")}>{rolling ? <LoaderCircle size={18} className="spin"/> : <><span className="dice-icon">◇</span>{game.hassle ? "先处理同衙刁难" : game.event ? "先选择事件应对" : game.debate ? "等待论策揭晓" : canRoll ? hasPrepared(game) ? "筹谋已定 · 掷骰" : "直接掷骰行运" : "等待对方掷骰"}</>}</button>
                 <div className="current-office"><span>你执子于{isLocal ? " · " + active?.name : ""}</span><button onClick={() => setDetail(active?.pos ?? 0)}>{OFFICES[active?.pos ?? 0].name}<ChevronRight size={13}/></button></div>
                 <p className="card-footnote">德 · 才 · 功 · 赃各 25%<br/>棋盘上方已列出本次助力、去向与考核预估。</p>
               </>}
             </section>
-            {game.status === "playing" && !game.event && !game.debate && <StrategyPanel game={game} seat={activeSeat} enabled={canRoll && !busy && (isLocal || connection === "connected")} onPlan={plan => void move("prepare",{plan})}/>}
+            {game.status === "playing" && !game.event && !game.debate && !game.hassle && <StrategyPanel game={game} seat={activeSeat} enabled={canRoll && !busy && (isLocal || connection === "connected")} onPlan={plan => void move("prepare",{plan})}/>}
             {!isLocal && game.players.length === 2 && <div className="reactions"><span>飞笺传情</span><div>{REACTIONS.map(text => <button key={text} disabled={busy || connection !== "connected"} onClick={() => move("react", { text })}>{text}</button>)}</div></div>}
             <section className="journal"><div className="journal-heading"><BookOpen size={15}/><h3>此局小记</h3><small>最近 {game.logs.length} 条</small></div><ol aria-live="polite">{game.logs.map(entry => <li key={game.match + "-" + entry.id}><i className={entry.seat === 1 ? "teal" : ""}/><span>{entry.text}</span></li>)}</ol></section>
             {!isLocal && <button className="backup-button" onClick={() => setModal("backup")}><ShieldCheck size={13}/>保存我的续局密钥</button>}
@@ -302,23 +307,25 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     {(modal || detail !== null) && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) { setModal(null); setDetail(null); } }}>
       <dialog open ref={dialogRef} aria-modal="true" className="modal" aria-label={detail !== null ? "官职升降" : modal === "rules" ? "游戏规则" : "同游提示"} onKeyDown={e => { if (e.key === "Escape") { setModal(null); setDetail(null); } }}>
         <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
-        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
+        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p><p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
           <p><strong>全图。</strong>{BOARD_COUNT} 格，{GROUPS.length - 1} 个功名 / 官署分区，加荣归终点。外层是科举和地方衙门，中层是翰林、都察、九卿与六部，中心是内阁与三公。六部在本作分别设署。</p>
           <p><strong>开局。</strong>两人从白丁、20 两银子出发，朱砂先手，轮流执骰。再战轮换先手。白丁逢德到监生、逢才到案首、逢功到童生、逢赃不动。</p>
-          <p><strong>掷骰。</strong>「德、才、功、赃」各 25%。按当前格的判词直接跳到指定官职，可能跨衙、外放或入阁。功多数留任；各格均有自己的四项去向。点击官职即可查看，彩色箭头显示当前执子的去向。</p>
-          <p><strong>每回合筹谋。</strong>掷骰前可选一次送礼、办差、政绩请荐、赈济、自省、资助、参奏或发起争辩，也可直接掷骰。筹谋后仍需掷骰结束本回合；事件处理不占这次筹谋。政绩上限 8、嫌疑上限 6、每衙人情上限 6，最低均为 0。</p>
-          <p><strong>拜谒送礼。</strong>入仕后向本衙主官送清茶（5 两 / 1 人情 / 0 嫌疑）、书画（10 两 / 2 人情 / 1 嫌疑）、珍玩（20 两 / 3 人情 / 2 嫌疑）。投其所好额外 +1 人情；清正主官拒收珍玩且不扣款。本衙人情满 3（荐贤期为 2），掷「才」可消耗人情改按「德」迁职；政绩也达 4 时，掷「功」可消耗 2 政绩和所需人情，合荐按「德」迁职。嫌疑 ≥3 暂停送礼和所有举荐。人情分衙存放；已是本衙主官则拜谒上级。对方占据受礼官位时，银两转给对方，含嫌疑的礼物也使对方嫌疑 +1。功名阶段与三公不设拜谒。</p>
+          <p><strong>掷骰。</strong>「德、才、功、赃」各 25%。按当前格的判词直接跳到指定官职，可能跨衙、外放或入阁。功多数留任；各格均有自己的四项去向。点击官职即可查看，彩色箭头显示含卡位后的实际去向。</p>
+          <p><strong>每回合筹谋。</strong>掷骰前可选一次送礼、办差、政绩请荐、赈济、自省、资助、参奏、同衙刁难或发起争辩，也可直接掷骰。筹谋后仍需掷骰结束本回合；事件处理不占这次筹谋。政绩上限 8、嫌疑上限 6、每衙人情上限 6，最低均为 0。</p>
+          <p><strong>拜谒送礼。</strong>入仕后向本衙主官送清茶（5 两 / 1 人情 / 0 嫌疑）、书画（10 两 / 2 人情 / 1 嫌疑）、珍玩（20 两 / 3 人情 / 2 嫌疑）。投其所好额外 +1 人情；清正主官拒收珍玩且不扣款。本衙人情满 3（荐贤期为 2），掷「才」可消耗人情改按「德」迁职；政绩也达 4 时，掷「功」可消耗 2 政绩和所需人情，合荐按「德」迁职。嫌疑 ≥3 暂停送礼和所有举荐。人情分衙存放；已是本衙主官则拜谒上级。只有双方处在同一中央高阶官署，且对方占据受礼官位时，礼金才转给对方，含嫌疑的礼物也使对方嫌疑 +1。地方官的拜谒面向各自所在地的虚拟主官，不向另一位玩家转账。功名阶段与三公不设拜谒。</p>
           <p><strong>办差与请荐。</strong>办差通常 +2 政绩、4 两。政绩 ≥4 时，掷「功」自动按「才」迁职，触发时消耗 2 政绩；去向未变不扣资源。花 3 政绩请荐，本次掷「功」改按「德」，其余结果不变且不退款，三公不可用。嫌疑必须低于 3 才能获得助力或请荐。赈济花 8 两，政绩 +1、嫌疑 -2；闭门自省不花银两，嫌疑 -2、政绩 -1（最低为 0），同样占一次筹谋。资助转给对方 10 两，双方各 +1 政绩。原始骰面为「功」额外 +1 政绩；入仕后掷「赃」增加 1 嫌疑。</p>
           <p><strong>考核与查办。</strong>每 6 次落子考核双方，先处理嫌疑：3 点时罚最多 6 两、政绩 -1、各衙人情 -1、嫌疑降至 2，不发考绩赏；4–5 点罚最多 20 两、降一职、政绩 -2、人情清空、嫌疑降至 2；6 点罚最多 30 两、降两职、政绩 -4、人情清空、嫌疑降至 3。嫌疑 ≥4 时，德才功全部留任且无赏银，连太师荣归也会被拦住。嫌疑低于 3 且政绩 ≥4，考核消耗 4 政绩、赏 12 两，按「才」迁职；若本衙人情足够，再消耗举荐所需人情改按「德」迁职。三公仅领赏、留任，不可借考核荣归。每两次考核，主官换喜好、各衙人情另减 1。对方嫌疑 ≥3，可花 2 政绩参奏：罚最多 16 两、降一职、政绩 -2、人情清空、嫌疑降至 2；对方嫌疑为 6 则按重案处罚。所有扣款不超过现有资源。</p>
           <p><strong>随机遭遇。</strong>每次未荣归的落子后，独立 30% 触发事件；文字狱风波、河患急报、驿站失文、岁末余银、雅集相邀、御史临门各占 5%。先由当事人选择应对，再继续下一位回合。每件事都有无需银两或政绩的选项。文字狱是架空的受牵连情节；对方也可自愿花 8 两援手，双方各 +1 政绩。不设置死亡或永久出局。</p>
           <p><strong>朝堂争辩。</strong>发起后双方暗选「典章 / 民情 / 实务」，投入 0–2 政绩。典章克民情，民情克实务，实务克典章。得分 = 投入 + 克制 2 分 + 本题官署专长 1 分。双方提交才揭晓和扣款；胜者 +2 政绩、10 两，入仕者本衙人情 +1，另一方 +1 政绩；平局各 +1 政绩、4 两。未提交的一方可推辞，不扣双方投入，但发起者的筹谋已用。每间每 6 次落子最多发起一次。</p>
-          <p><strong>相逢。</strong>进入新官职时，两人若同衙不同职，低位者向高位者送 10 两；不足则送现有银两。比较该衙内的列序，同职、功名阶段和留任不送礼。这项自动见面礼不增加人情或嫌疑。</p>
+          <p><strong>中央高位卡位。</strong>{OFFICE_SCOPE}这些格位一职一人。目标被占时，后来者退到该格前一级；该区最低格则沿棋盘退职路线落位。不挤走先到者，不会跳过上级坐更高位。功名、地方官和未达门槛的京官允许同格。落子、考核、参奏降职和事件都执行卡位。自动助力若因占位未改变实际去向，不扣助力资源；已预付的请荐费用不退。卡位留在原位不领升迁赏银，原始功加政绩、赃罚银仍生效。考核先按同一份资源快照判定，再依次落位；每期轮换处理先后。考核被卡位仍扣 4 政绩、领 12 两赏银；合荐未改善落点则不扣人情。</p>
+          <p><strong>同衙相逢。</strong>双方都达到上述中央高位门槛，并且属于同一官署，才成立上下级。九卿按具体寺署区分，六部各自独立。进入新位后同衙不同职，低位者送见面礼最多 10 两；原位留任不重复送。地方官视作在不同地方任职，无双方同衙关系、见面礼或刁难。</p>
+          <p><strong>上级刁难。</strong>中央同衙上级可用本回合筹谋，花 1 政绩、自增 1 嫌疑，选择加派差事、索取孝敬或压住荐书；全局每 6 次落子最多一次，嫌疑 ≥4 的上级不能发起。下级照办时分别损失最多 2 政绩、向上级交最多 6 两，或下次本人掷骰禁用助力（不影响普通判词和考核）。也可花 2 本衙人情斡旋，或花 2 政绩申诉，使上级再加 2 嫌疑、扣 1 政绩并撤销刁难。应对不占下级自己的筹谋；上级可主动撤回，原成本和冷却不退。处理后仍由上级完成本次掷骰。</p>
           <p><strong>三公。</strong>太保逢德至太傅，太傅逢德至太师，太师再逢德荣归。三公逢才、功、赃留任，并分别向对手索取最多 10、8、5 两；实际索得银两则嫌疑 +1。三公也会被查办：太师退太傅、太傅退太保、太保退内阁大学士。这些金额与结算方式是本作设定。</p>
           <p><strong>胜负。</strong>先荣归者胜。银两最低为 0，不会破产出局；这版不混入四枚普通骰子的对子、穿花等另一套规则。</p>
           <p><strong>手机看图。</strong>全图可放大至 350%，放大后滑动 / 拖动。也可切换「分衙阅读」，选择衙门后逐格查看。搜索官职，或点「定位执子」快速回到棋子。</p>
           <p><strong>远程与续局。</strong>每间两席，自动保存；连续 30 天无操作后过期。双方联网同步，无回合倒计时。换设备时用自己的续局密钥恢复席位。旧版棋局保留回合、已有银两和已获得资源；新开局及再来一局才改为每人 20 两。最早的旧棋盘会映射到新图的相应官职。</p>
-          <div className="notice"><strong>依据与改编边界</strong><p>馆藏资料可核实三层分区、逐格判词、15 种出身与白丁去向；牛津藏本研究记有向上司送见礼。考核、文字狱、廷议提供历史背景，不同图本规则并不一致。送礼提高晋升、人情、主官性情、定期考核数值、随机事件选择和暗选争辩，均为本作原创机制。文字狱情节不复演具体史案；争辩胜负不代表观点在历史上正确。其余逐格升降、125 格规模和银两也是游戏改编，不宣称完整复刻古图。</p></div>
+          <div className="notice"><strong>依据与改编边界</strong><p>馆藏资料可核实三层分区、逐格判词、15 种出身与白丁去向；牛津藏本研究记有向上司送见礼。考核、文字狱、廷议提供历史背景，不同图本规则并不一致。高位卡位、同衙刁难、送礼提高晋升、人情、主官性情、定期考核数值、随机事件选择和暗选争辩，均为本作原创机制。文字狱情节不复演具体史案；争辩胜负不代表观点在历史上正确。其余逐格升降、125 格规模和银两也是游戏改编，不宣称完整复刻古图。</p></div>
           <div className="sources-list"><h3>查阅资料</h3>{SOURCES.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title} ↗</strong><span>{source.note}</span></a>)}</div>
         </div></> :
         modal === "install" ? <><p className="eyebrow">随身一方棋盘</p><h2>把同游放到桌面。</h2><p className="muted">以手机网页 App 的形式打开，<br/>点图标就能回到棋盘。</p>
