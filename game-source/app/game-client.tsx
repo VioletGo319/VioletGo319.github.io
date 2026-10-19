@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Download, Heart, Home, Link, LoaderCircle, RotateCcw, Share2, ShieldCheck, Sparkles, Users, Wifi, WifiOff, X } from "lucide-react";
 import PrivateRoom from "./private-room";
+import GameLobby from "./game-lobby";
 import Soundscape from "./soundscape";
 import { economyAt, silverAt } from "../lib/economy";
-import ExpandedBoard from "./expanded-board";
 import { authorityAt, exclusiveOffice, OFFICE_SCOPE, type HassleChoice } from "../lib/offices";
 import { BOARD_COUNT, GROUPS, HOME_ID, SOURCES } from "../lib/board";
 import { discardTactic, takeCommission, abandonCommission, useTactic, actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
@@ -17,7 +17,7 @@ import type { CardId } from "../lib/intrigue";
 
 type Snapshot = { code: string; version: number; seat: Seat; game: PublicGame; serverTime: number };
 type Session = { code: string; token: string };
-type Modal = "rules" | "install" | "invite" | "restore" | "backup" | "leave" | null;
+type Modal = "entry" | "rules" | "install" | "invite" | "restore" | "backup" | "leave" | null;
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
 const STORE = "tongyou-session-v1", LOCAL = "tongyou-local-v1";
 function readStore(key: string) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -73,7 +73,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
       setSavedSolo(soloOld?.players?.length === 2);
     } catch { /* Ignore malformed local preferences. */ }
     const invite = new URLSearchParams(location.hash.slice(1)).get("room");
-    if (invite) { setCode(invite.toUpperCase()); setTab("join"); }
+    if (invite) { setCode(invite.toUpperCase()); setTab("join"); setModal("entry"); }
     const install = (e: Event) => { e.preventDefault(); setInstallEvent(e as InstallEvent); };
     window.addEventListener("beforeinstallprompt", install);
     const visibility = () => setForeground(document.visibilityState !== "hidden");
@@ -244,7 +244,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   }
   const active = game?.players[activeSeat];
   const recentReaction = game?.reactions.find(r => clock - r.at < 7000);
-  return <div className={"app-shell" + (inGame ? " room-open" : "")} style={{"--mansion-art": `url("${appBase}art/jade-courtyard-v1.webp")`} as CSSProperties}>
+  return <div className={"app-shell" + (inGame ? " room-open" : "")} style={{"--mansion-art": `url("${appBase}art/jade-courtyard-v1.webp")`,"--lobby-art": `url("${appBase}art/lantern-duet-v2.webp")`} as CSSProperties}>
     <header className="site-header">
       <button className="brand" aria-label="返回同游首页" onClick={() => inGame ? setModal("leave") : returnHome()}>
         <span className="brand-seal">同<br/>游</span>
@@ -261,11 +261,17 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         soloState={solo ? botPaused ? "paused" : botThinking ? "thinking" : "ready" : undefined} onBotPause={()=>setBotPaused(v=>!v)}
         onMove={(action,extra)=>void move(action,extra)} onDetail={setDetail} onInvite={()=>setModal("invite")} onBackup={()=>setModal("backup")}
         locked={isLocal&&!solo&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
-      : <><div className="page-intro"><div className="lobby-scene" aria-hidden="true"/><div className="intro-content"><p className="eyebrow"><span/> 古风策略棋游</p><h1>一局浮生，<br/><em>与你共赴青云。</em></h1><p className="intro-copy">从一介布衣，到满朝风云。<br/>你我的下一步，会在哪里相逢？</p><div className="intro-features"><span><Users size={13}/>两人远程</span><span><ShieldCheck size={13}/>各藏私账</span><span><Heart size={13}/>随时续局</span></div></div><div className="intro-stamp">山海有期<br/>同游不散</div></div>
-        <div className="game-layout lobby-layout"><section className="board-column" aria-label="升官图棋盘"><div className="board-topline"><span>功名 · 地方 · 京官 · 三公</span><button onClick={()=>setModal("rules")}>玩法与改编说明</button></div><ExpandedBoard game={null} activeSeat={0} onDetail={setDetail}/></section>
-          <aside className="play-column"><section className="lobby-card">
+       : <GameLobby appBase={appBase} onEnter={mode=>{setTab(mode);setModal("entry");}} onDetail={setDetail} onRules={()=>setModal("rules")} resume={(saved||savedSolo||savedLocal)?<div className="lobby-resume"><span><RotateCcw size={14}/>棋局未散，等你归来</span><div>{savedSolo&&<button disabled={busy} onClick={()=>startLocal(true,true)}>续上次单人局<ArrowRight size={13}/></button>}{saved&&<button disabled={busy} onClick={()=>void resume()}>续上次双人雅间<ArrowRight size={13}/></button>}{savedLocal&&<button disabled={busy} onClick={()=>startLocal(true)}>续同屏棋局<ArrowRight size={13}/></button>}</div></div>:null}/>}
+    </main>
+    {!inGame&&<footer><span>同游</span>愿隔山海的人，也有一方共同的棋盘。<button onClick={()=>setModal("rules")}>参考古代升官图 · 研究改编</button></footer>}
+    {toast && <div className="toast" role="status"><Check size={15}/>{toast}</div>}
+    {(modal || detail !== null) && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) { setModal(null); setDetail(null); } }}>
+      <dialog open ref={dialogRef} aria-modal="true" className={"modal"+(modal === "entry" ? " entry-modal" : "")} aria-label={detail !== null ? "官职升降" : modal === "entry" ? "选择入席方式" : modal === "rules" ? "游戏规则" : "同游提示"} onKeyDown={e => { if (e.key === "Escape") { setModal(null); setDetail(null); } }}>
+        <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
+        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{isPalaceGate(detail)&&<p className="notice">科甲格属于殿试定榜区。首次到达须先完成三轮殿试；下方为取得该科甲后的授官去向，赃不降科甲。会元格作为殿试入口，不单列为最终名次。</p>}<p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = isPalaceGate(detail) ? appointmentAction(detail,face) : actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
+        modal === "entry" ? <section className="lobby-card">
             <div className="card-overline"><span className="small-line"/> 今夜，与君相约 <span className="small-line"/></div>
-            <h2>棋盘已备，只等你。</h2><p className="muted">接一纸委托，藏一手锦囊。与君共赴青云。</p>
+            <h2>{tab === "solo" ? "一人，也有满朝好戏。" : tab === "join" ? "赴君之约，入席同游。" : "开一席，只等你们。"}</h2><p className="muted">{tab === "solo" ? "二十两起家，和青岚先生一较高下。" : "相隔山海，也能共下一局棋。"}</p>
             <div className="tabs" role="tablist" aria-label="入席方式">
               <button role="tab" aria-selected={tab === "create"} className={tab === "create" ? "selected" : ""} onClick={() => setTab("create")}>创建雅间</button>
               <button role="tab" aria-selected={tab === "join"} className={tab === "join" ? "selected" : ""} onClick={() => setTab("join")}>赴约入席</button>
@@ -290,15 +296,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
               {savedLocal && <button className="text-button" onClick={() => startLocal(true)}>继续上次同屏棋局</button>}
             </details>
             <button className="restore-button" onClick={() => setModal("restore")}>换了手机？用续局密钥找回</button>
-          </section></aside></div>
-        <section className="how-strip"><div><span>壹</span><p><strong>各有府邸，各藏私账</strong><small>政绩、嫌疑与人情仅自己可见</small></p></div><div><span>贰</span><p><strong>经营人脉，谋划仕途</strong><small>个人关系网与中央高位争夺</small></p></div><div><span>叁</span><p><strong>一屏筹谋，轻点落子</strong><small>棋盘、关系、府务随手切换</small></p></div></section></>}
-    </main>
-    {!inGame&&<footer><span>同游</span>愿隔山海的人，也有一方共同的棋盘。<button onClick={()=>setModal("rules")}>参考古代升官图 · 研究改编</button></footer>}
-    {toast && <div className="toast" role="status"><Check size={15}/>{toast}</div>}
-    {(modal || detail !== null) && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) { setModal(null); setDetail(null); } }}>
-      <dialog open ref={dialogRef} aria-modal="true" className="modal" aria-label={detail !== null ? "官职升降" : modal === "rules" ? "游戏规则" : "同游提示"} onKeyDown={e => { if (e.key === "Escape") { setModal(null); setDetail(null); } }}>
-        <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
-        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{isPalaceGate(detail)&&<p className="notice">科甲格属于殿试定榜区。首次到达须先完成三轮殿试；下方为取得该科甲后的授官去向，赃不降科甲。会元格作为殿试入口，不单列为最终名次。</p>}<p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = isPalaceGate(detail) ? appointmentAction(detail,face) : actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
+          </section> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
           <p><strong>谋略新玩法。</strong>在「府务 → 谋略」切换委托、锦囊、朝局。两位开局各得一张清白卷宗；旧棋局升级也会获得，原有私账、殿试、廷议与回合保留。单人、人机、同屏和远程使用同一套规则。委托进度、锦囊和护身状态仅自己可见。</p>
           <p><strong>私密委托。</strong>每期考核间隔最多接一份，免费且不占筹谋，先接取再行动，不追记此前进度。每份要在自己的第 4 次普通落子结算前完成，殿试三轮不计次数；第 4 次落子后的随机事件已超过期限。到期或放弃不额外扣款，但当期不能重接。功名阶段完成课业、迁格或进入殿试，奖励学识与锦囊，不奖银两或政绩；入仕后可办差、送礼、赈济、自省、赢廷议或历练，按委托目标积进度。护身留任不算迁格，考核调任不算骰子历练。委托赏银按接取官阶锁定，完成时再加当期朝局赏银；其余资源仍有上限。科甲已定者须授官后再接。</p>
