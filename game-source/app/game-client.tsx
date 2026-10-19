@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Download, Heart, Home, Link, LoaderCircle, RotateCcw, Share2, ShieldCheck, Sparkles, Users, Wifi, WifiOff, X } from "lucide-react";
 import PrivateRoom from "./private-room";
 import Soundscape from "./soundscape";
@@ -10,6 +10,7 @@ import { BOARD_COUNT, GROUPS, HOME_ID, SOURCES } from "../lib/board";
 import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
 import { hasPrepared, riskBand, type PlanInput } from "../lib/strategy";
 import { randomInt, type DebateBid } from "../lib/encounters";
+import { appointmentAction, isPalaceGate } from "../lib/scholar";
 
 type Snapshot = { code: string; version: number; seat: Seat; game: PublicGame; serverTime: number };
 type Session = { code: string; token: string };
@@ -42,7 +43,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   const lock = useRef(false), requestId = useRef(0), toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [localDoor, setLocalDoor] = useState("");
-  const activeSeat: Seat = local ? local.hassle?.junior ?? local.event?.seat ?? (local.debate && local.debate.bids[local.turn] ? (1-local.turn) as Seat : local.turn) : snapshot?.seat ?? 0;
+  const activeSeat: Seat = local ? local.exam?.seat ?? local.hassle?.junior ?? local.event?.seat ?? (local.debate && local.debate.bids[local.turn] ? (1-local.turn) as Seat : local.turn) : snapshot?.seat ?? 0;
   const game: PublicGame | null = local ? publicGame(local, activeSeat) : snapshot?.game ?? null;
   const isLocal = !!local, inGame = !!game;
   const canRoll = !!game && game.status === "playing" && !game.event && !game.debate && !game.hassle && (isLocal || game.turn === snapshot?.seat);
@@ -89,7 +90,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     const response = await fetch(apiEndpoint + (body ? "" : "?code=" + target.code), {
       method: body ? "POST" : "GET", cache: "no-store",
       credentials: "omit",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "6" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "7" },
       ...(body ? { body: JSON.stringify({ ...body, code: target.code }) } : {}),
       signal: AbortSignal.timeout(12000),
     }).catch(() => { throw new Error("联机服务暂时连接不上，请检查网络后重试；也可先同屏试玩。"); });
@@ -200,7 +201,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   }
   const active = game?.players[activeSeat];
   const recentReaction = game?.reactions.find(r => clock - r.at < 7000);
-  return <div className={"app-shell" + (inGame ? " room-open" : "")}>
+  return <div className={"app-shell" + (inGame ? " room-open" : "")} style={{"--mansion-art": `url("${appBase}art/jade-courtyard-v1.webp")`} as CSSProperties}>
     <header className="site-header">
       <button className="brand" aria-label="返回同游首页" onClick={() => inGame ? setModal("leave") : returnHome()}>
         <span className="brand-seal">同<br/>游</span>
@@ -216,11 +217,11 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
       {game ? <PrivateRoom key={game.match+":"+activeSeat} game={game} busy={busy} rolling={rolling} connection={connection} isLocal={isLocal} roomCode={session?.code}
         onMove={(action,extra)=>void move(action,extra)} onDetail={setDetail} onInvite={()=>setModal("invite")} onBackup={()=>setModal("backup")}
         locked={isLocal&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
-      : <><div className="page-intro"><div><p className="eyebrow"><span/> 一方棋盘 · 两间府邸</p><h1>各自筹谋，<em>与君同游。</em></h1><p className="intro-copy">私账深藏府内，官途相逢朝堂。<br/>隔着山海，也能共赴青云。</p></div><div className="intro-stamp">知己<br/>同游</div></div>
+      : <><div className="page-intro"><div className="lobby-scene" aria-hidden="true"/><div className="intro-content"><p className="eyebrow"><span/> 双人古风策略棋游</p><h1>一局浮生，<br/><em>与你共赴青云。</em></h1><p className="intro-copy">从一介布衣，到满朝风云。<br/>你我的下一步，会在哪里相逢？</p><div className="intro-features"><span><Users size={13}/>两人远程</span><span><ShieldCheck size={13}/>各藏私账</span><span><Heart size={13}/>随时续局</span></div></div><div className="intro-stamp">山海有期<br/>同游不散</div></div>
         <div className="game-layout lobby-layout"><section className="board-column" aria-label="升官图棋盘"><div className="board-topline"><span>功名 · 地方 · 京官 · 三公</span><button onClick={()=>setModal("rules")}>玩法与改编说明</button></div><ExpandedBoard game={null} activeSeat={0} onDetail={setDetail}/></section>
           <aside className="play-column"><section className="lobby-card">
-            <div className="card-overline"><span className="small-line"/> 与君相约 <span className="small-line"/></div>
-            <h2>落座，开一局。</h2><p className="muted">一人开局，一人赴约。</p>
+            <div className="card-overline"><span className="small-line"/> 今夜，与君相约 <span className="small-line"/></div>
+            <h2>棋盘已备，只等你。</h2><p className="muted">一人开局，一人赴约。无需注册。</p>
             <div className="tabs" role="tablist" aria-label="入席方式">
               <button role="tab" aria-selected={tab === "create"} className={tab === "create" ? "selected" : ""} onClick={() => setTab("create")}>创建雅间</button>
               <button role="tab" aria-selected={tab === "join"} className={tab === "join" ? "selected" : ""} onClick={() => setTab("join")}>赴约入席</button>
@@ -249,14 +250,18 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     {(modal || detail !== null) && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) { setModal(null); setDetail(null); } }}>
       <dialog open ref={dialogRef} aria-modal="true" className="modal" aria-label={detail !== null ? "官职升降" : modal === "rules" ? "游戏规则" : "同游提示"} onKeyDown={e => { if (e.key === "Escape") { setModal(null); setDetail(null); } }}>
         <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
-        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p><p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
+        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{isPalaceGate(detail)&&<p className="notice">科甲格属于殿试定榜区。首次到达须先完成三轮殿试；下方为取得该科甲后的授官去向，赃不降科甲。会元格作为殿试入口，不单列为最终名次。</p>}<p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = isPalaceGate(detail) ? appointmentAction(detail,face) : actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
-          <p><strong>各自府邸。</strong>每位玩家持自己的续局密钥进入独立视图。银两、政绩、嫌疑、人情、关系网、筹谋种类与考核私账仅本人可见；对方只能看公开官职、掷骰结果和已经发生的互动。对方的廷议投入与得分不公开，结束后仅揭晓论策和胜负。同屏试玩交接时遮挡画面，但共用设备本身不构成联机级别的数据隔离。</p>
+          <p><strong>各自府邸。</strong>每位玩家持自己的续局密钥进入独立视图。银两、学识、政绩、嫌疑、人情、关系网、筹谋种类与考核私账仅本人可见；对方只能看公开官职、掷骰结果和已经发生的互动。对方的廷议投入与得分不公开，结束后仅揭晓论策和胜负。同屏试玩交接时遮挡画面，但共用设备本身不构成联机级别的数据隔离。</p>
           <p><strong>官阶银两。</strong>按任职分为 1–5 档，府邸顶部标出倍数。初仕 ×1，一方任事 ×2，方面要职 ×3，封疆卿辅 ×4，三公 ×5。下面规则中的金额为基础金额，送礼、赈济、办差收入、掷骰赏罚、考核、事件和廷议赏银均乘本人结算前的档位；具体以按钮和仕途预览为准。援手和资助按付款者档位；同衙见礼、孝敬与三公索贿按收取者档位。每次转账双方金额一致，不足只交现有；自省和免费事件选项始终不收费。旧局已有银两不重算。</p>
           <p><strong>全图。</strong>{BOARD_COUNT} 格，{GROUPS.length - 1} 个功名 / 官署分区，加荣归终点。外层是科举和地方衙门，中层是翰林、都察、九卿与六部，中心是内阁与三公。六部在本作分别设署。</p>
           <p><strong>开局。</strong>两人从白丁、20 两银子出发，朱砂先手，轮流执骰。再战轮换先手。白丁逢德到监生、逢才到案首、逢功到童生、逢赃不动。</p>
-          <p><strong>掷骰。</strong>「德、才、功、赃」各 25%。按当前格的判词直接跳到指定官职，可能跨衙、外放或入阁。功多数留任；各格均有自己的四项去向。点击官职即可查看，彩色箭头显示含卡位后的实际去向。</p>
-          <p><strong>每回合筹谋。</strong>掷骰前可选一次送礼、办差、政绩请荐、赈济、自省、资助、参奏、同衙刁难或发起争辩，也可直接掷骰。筹谋后仍需掷骰结束本回合；事件处理不占这次筹谋。政绩上限 8、嫌疑上限 6、每衙人情上限 6，最低均为 0。</p>
+          <p><strong>寒窗与学识。</strong>功名阶段的「寒窗课业」每次花 2 两、学识 +2，上限 12；不赚银两、不加政绩。入仕后办差才按官阶领银两、积政绩。功名阶段掷「功」也不增加政绩，不能靠政绩请荐或考核跳过科举。没钱读书仍可直接掷骰，不会卡住棋局。学识与私账一样仅本人可见。</p>
+          <p><strong>殿试定榜。</strong>首次进入进士及之后的科甲格，改为殿试环节：同一人连续掷三次，经义、策论、御前问对。入场学识锁定，每骰德 3 分、才 2 分、功 1 分、赃 0 分；总分为学识加三轮得分。0–6 同进士出身、7–10 进士出身、11–13 传胪、14–16 探花、17–18 榜眼、19–21 状元。三轮内不换手、不触发随机事件或官员考核；对方只看到进度与最终科甲。</p>
+          <p><strong>金榜授官。</strong>定榜后另掷一骰，按原骰面判词分配官职；原判词仅在科甲格间跳转时，沿同一骰面继续查至首个官职。赃只留位候铨，不倒退科甲；这次掷骰后正常换手。直接出仕的原有路径保留。获得的科甲永久记在府邸，授官后的贬职最低到外县典史，不退回读书。旧局已处进士至状元格者保留既有功名，直接等待授官。</p>
+          <p><strong>殿试改编说明。</strong>一甲进士及第、二甲进士出身、三甲同进士出身参考故宫资料。三轮掷骰、经义至问对的分轮、学识阈值与科甲保留是游戏改编；古代殿试并非这样掷骰评分。会元原指会试第一名，本作将到达该格统一接入殿试。</p>
+          <p><strong>掷骰。</strong>「德、才、功、赃」各 25%。按当前格的判词直接跳到指定官职，可能跨衙、外放或入阁。功多数留任；进入科甲区先完成殿试，各官职仍有自己的四项去向。点击官职即可查看，彩色箭头显示含卡位后的实际去向。</p>
+          <p><strong>每回合筹谋。</strong>掷骰前可选一次送礼、办差、政绩请荐、赈济、自省、资助、参奏、同衙刁难或发起争辩，也可直接掷骰。筹谋后仍需掷骰结束本回合；事件处理不占这次筹谋。学识上限 12、政绩上限 8、嫌疑上限 6、每衙人情上限 6，最低均为 0。</p>
           <p><strong>拜谒送礼。</strong>入仕后向本衙主官送清茶（5 两 / 1 人情 / 0 嫌疑）、书画（10 两 / 2 人情 / 1 嫌疑）、珍玩（20 两 / 3 人情 / 2 嫌疑）。投其所好额外 +1 人情；清正主官拒收珍玩且不扣款。本衙人情满 3（荐贤期为 2），掷「才」可消耗人情改按「德」迁职；政绩也达 4 时，掷「功」可消耗 2 政绩和所需人情，合荐按「德」迁职。嫌疑 ≥3 暂停送礼和所有举荐。人情分衙存放；已是本衙主官则拜谒上级。只有双方处在同一中央高阶官署，且对方占据受礼官位时，礼金才转给对方，含嫌疑的礼物也使对方嫌疑 +1。地方官的拜谒面向各自所在地的虚拟主官，不向另一位玩家转账。功名阶段与三公不设拜谒。</p>
           <p><strong>办差与请荐。</strong>办差通常 +2 政绩、4 两。政绩 ≥4 时，掷「功」自动按「才」迁职，触发时消耗 2 政绩；去向未变不扣资源。花 3 政绩请荐，本次掷「功」改按「德」，其余结果不变且不退款，三公不可用。嫌疑必须低于 3 才能获得助力或请荐。赈济花 8 两，政绩 +1、嫌疑 -2；闭门自省不花银两，嫌疑 -2、政绩 -1（最低为 0），同样占一次筹谋。资助转给对方 10 两，双方各 +1 政绩。原始骰面为「功」额外 +1 政绩；入仕后掷「赃」增加 1 嫌疑。</p>
           <p><strong>考核与查办。</strong>每 6 次落子考核双方，先处理嫌疑：3 点时罚最多 6 两、政绩 -1、各衙人情 -1、嫌疑降至 2，不发考绩赏；4–5 点罚最多 20 两、降一职、政绩 -2、人情清空、嫌疑降至 2；6 点罚最多 30 两、降两职、政绩 -4、人情清空、嫌疑降至 3。嫌疑 ≥4 时，德才功全部留任且无赏银，连太师荣归也会被拦住。嫌疑低于 3 且政绩 ≥4，考核消耗 4 政绩、赏 12 两，按「才」迁职；若本衙人情足够，再消耗举荐所需人情改按「德」迁职。三公仅领赏、留任，不可借考核荣归。每两次考核，主官换喜好、各衙人情另减 1。密折参奏不显示对方嫌疑，先花 2 政绩并占用筹谋；对方嫌疑不足 3 时不获采纳、自身嫌疑 +1；达到 3 才查办：罚最多 16 两、降一职、政绩 -2、人情清空、嫌疑降至 2；对方嫌疑为 6 则按重案处罚。所有扣款不超过现有资源。</p>

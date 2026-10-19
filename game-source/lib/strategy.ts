@@ -2,6 +2,7 @@
 import { GROUPS, OFFICES, actionsAt, officeId, type Face, type Action } from "./board";
 import { ownPlayer } from "./view";
 import { silverAt, moneyText } from "./economy";
+import { appointmentAction, isAcademic, isPalaceGate } from "./scholar";
 import type { Game, PublicGame, Seat } from "./game";
 import { demotionTarget, officeLanding, sameAuthority, type HassleKind } from "./offices";
 export { demotionTarget } from "./offices";
@@ -56,11 +57,12 @@ export function giftQuote(game: Game | PublicGame, seat: Seat, id: GiftId) {
 }
 function rawRollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
   const p = ownPlayer(game, seat), o = OFFICES[p.pos];
-  const actions = actionsAt(p.pos), base = actions[face];
+  const actions = actionsAt(p.pos), base = isAcademic(p.pos)&&p.degree?appointmentAction(p.pos,face):actions[face];
   const unchanged = { action: base, effectiveFace: face, reason: "", favorCost: 0, meritCost: 0, blocked: false };
   // At four suspicion, even a real 德 cannot advance or retire at 太师.
   if (p.risk >= 4 && o.group !== "home" && face !== "赃")
     return { ...unchanged, action: { to: p.pos, coins: 0, label: "停升待查，本次留任且无赏银", short: "停升待查", kind: "stay" } as Action, reason: "嫌疑停升", blocked: true };
+  if(isAcademic(p.pos))return !p.degree&&isPalaceGate(base.to)?{...unchanged,action:{...base,to:officeId("origin.9"),label:"会试中式，进入三轮殿试",short:"殿试"}}:unchanged;
   if (p.risk >= 3 || p.recommendationBlocked || ["court", "home"].includes(o.group)) return unchanged;
   const cost = currentEdict(game).favorCost;
   const recommended = o.group !== "origin" && (p.favor[o.group] || 0) >= cost;
@@ -84,7 +86,7 @@ export function rollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
     landing = baseLanding;
   }
   const stopped = landing.occupant !== null && landing.to === pos;
-  const action = landing.occupant === null ? preview.action : { ...preview.action, to: landing.to,
+  const action = landing.occupant === null&&landing.to===preview.action.to ? preview.action : { ...preview.action, to: landing.to,
     coins: stopped ? Math.min(0, preview.action.coins) : preview.action.coins,
     label: landing.note + (stopped ? "原位候缺，本次无升迁赏银" : ""), short: OFFICES[landing.to].name,
     kind: stopped ? "stay" as const : preview.action.kind };
@@ -119,6 +121,7 @@ function rawReviewPreview(game: Game | PublicGame, seat: Seat) {
   }
   if (p.risk === 3) return { ...result, kind: "warning", title: "考核申诫", coins: -Math.min(p.coins, silverAt(p.pos, 6)), merit: -Math.min(p.merit, 1), favorDecay: 1, riskAfter: 2,
     detail: "留任，罚最多 " + silverAt(p.pos, 6) + " 两、政绩 −1、各衙人情 −1；嫌疑降至 2，不发考绩赏。" };
+  if(isAcademic(p.pos))return {...result,title:p.degree?"金榜待授官":"寒窗待试",detail:p.degree?"科甲已定，下一骰按原判词授官；不再参加科举或凭政绩跳级。":"尚未入仕，不参与政绩升迁；花 2 两修习课业可加 2 学识，学识用于殿试。"};
   if (p.merit >= 4) {
     const court = ["court", "home"].includes(group);
     const joint = !court && group !== "origin" && (p.favor[group] || 0) >= favorCost;

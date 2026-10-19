@@ -11,6 +11,7 @@ export type Group = { key: string; name: string; layer: "origin" | "outer" | "mi
 export type Office = { id: number; key: string; name: string; department: string; group: string; order: number; stage: string; description: string };
 export const BOARD_WIDTH = 1200, BOARD_HEIGHT = 1260;
 export const SOURCES = [
+  { title: "故宫博物院 · 清代殿试", url: "https://www.dpm.org.cn/court/system/236363.html", note: "一甲进士及第、二甲进士出身、三甲同进士出身。三轮掷骰与学识计分均为本作改编。" },
   { title: "故宫博物院 · 折叠式《升官图》", url: "https://www.dpm.org.cn/collection/utensil/232141.html", note: "三圈布局、衙门分区、四字陀螺与白丁判词。" },
   { title: "国立台湾历史博物馆 · 木板印升官图", url: "https://collections.nmth.gov.tw/CollectionContent.aspx?a=132&rno=2006.002.1694", note: "中心三公、15 种功名出身及逐格奖惩结构。" },
   { title: "洛阳民俗博物馆 ·《上官图》游戏图", url: "https://www.lymsmuseum.cn/collect/judge/59.html", note: "按判词跨官职跳转的实际路径，也说明不同图本规则有别。" },

@@ -5,7 +5,9 @@ import { BOARD_COUNT, BOARD_HEIGHT, BOARD_WIDTH, FACES, GROUPS, HOME_ID, OFFICES
 import type { PublicGame, Seat } from "../lib/game";
 import { exclusiveOffice, OFFICE_SCOPE } from "../lib/offices";
 import { rollPreview } from "../lib/strategy";
+import { appointmentAction, isPalaceGate } from "../lib/scholar";
 const colors = { 德:"#a6372b", 才:"#386d66", 功:"#987232", 赃:"#726a65" };
+const displayedActions=(id:number)=>isPalaceGate(id)?Object.fromEntries(FACES.map(f=>[f,appointmentAction(id,f)])) as ReturnType<typeof actionsAt>:actionsAt(id);
 function Official({ x, y }: { x:number;y:number }) {
   return <g transform={"translate("+x+","+y+")"} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
     <path d="M-13-37h26v9h-26zM-25-32h12m26 0h12M-10-28c-3 13 0 21 10 23 10-2 13-10 10-23M-10-9l-11 9-13 42 13 5 6-25-4 52h38l-4-52 6 25 13-5L21 0 10-9M-9-8L0 11 9-8M-15 24l30 10M15 24l-30 10M-5 12h10v18H-5zM-19 74h38M-15 75v6H-5v-6M5 75v6h10v-6"/>
@@ -68,12 +70,12 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
               <text x={g.x+g.w/2} y={g.y+19} textAnchor="middle" className="group-label">{g.name}</text></>}
           </g>)}
           {OFFICES.map(o=>{
-            const r=officeRect(o.id),a=actionsAt(o.id),players=game?.players.map((p,seat)=>({...p,seat})).filter(p=>p.pos===o.id)||[];
+            const r=officeRect(o.id),a=displayedActions(o.id),players=game?.players.map((p,seat)=>({...p,seat})).filter(p=>p.pos===o.id)||[];
             const occupied=exclusiveOffice(o.id)&&players.length>0;
             const isCourt=o.group==="court",isHome=o.id===HOME_ID;
             const compact=r.h<52, narrow=r.w<78,vertical=!compact&&(narrow||r.h>r.w*1.25);
             const here=pos===o.id, dest=showRoutes&&FACES.some(f=>actions[f].to===o.id&&o.id!==pos);
-            return <g key={o.id} className={"map-office "+(here?"selected ":"")+(game?.lastRoll?.to===o.id?"landed ":"")+(isCourt?"court-office ":"")} role="button" tabIndex={0} aria-label={o.department+" "+o.name+(occupied?"，在任："+players[0].name+"，此位独占":"，"+(exclusiveOffice(o.id)?"独占空位":"允许同格"))+"，查看四种判词"} onClick={()=>onDetail(o.id)} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onDetail(o.id);}}}>
+            return <g key={o.id} className={"map-office "+(here?"selected ":"")+(game?.lastRoll?.to===o.id?"landed ":"")+(isCourt?"court-office ":"")+(isPalaceGate(o.id)?"exam-office ":"")} role="button" tabIndex={0} aria-label={o.department+" "+o.name+(occupied?"，在任："+players[0].name+"，此位独占":"，"+(exclusiveOffice(o.id)?"独占空位":"允许同格"))+"，查看四种判词"} onClick={()=>onDetail(o.id)} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onDetail(o.id);}}}>
               <rect x={r.x+.8} y={r.y+.8} width={r.w-1.6} height={r.h-1.6} fill={here?"#e5c99680":occupied?"#c5866940":players.length?"#cfb6864d":dest?"#dfe8d944":"transparent"} stroke={here?"#8b4931":occupied?"#a3392c":"#bb896d"} strokeWidth={here?3:occupied?2.5:.8}/>
               {isHome?<><text x={r.x+r.w/2} y={r.y+27} className="home-label" textAnchor="middle">荣 归 故 里</text><text x={r.x+r.w/2} y={r.y+46} textAnchor="middle" className="home-subtitle">唯太师逢德 · 功成归乡</text></>:
               isCourt?<><text x={r.x+r.w/2} y={r.y+36} textAnchor="middle" className="court-name">{o.name}</text><g style={{color:"#a24731"}}><Official x={r.x+r.w/2} y={r.y+108}/></g><text x={r.x+r.w/2} y={r.y+211} textAnchor="middle" className="court-rule">德 · {a.德.short}</text><text x={r.x+r.w/2} y={r.y+233} textAnchor="middle" className="court-rule muted-rule">才功赃 · 索贿留任</text></>:
@@ -97,7 +99,7 @@ export default function ExpandedBoard({ game, activeSeat, onDetail }: {game:Publ
       </div>
     </div>:<div className="department-reader">
       <div className="reader-heading"><h3>{group.name}</h3><span>{group.ids.length} 个格位</span></div><p>{group.description}</p>
-      <div className="reader-cells">{group.ids.map(id=>{const o=OFFICES[id],a=actionsAt(id);return <button key={id} className={id===pos?"here":""} onClick={()=>onDetail(id)}><strong>{o.name}{exclusiveOffice(id)&&<small className="reader-exclusive">独占</small>}{game?.players.filter(p=>p.pos===id).map((p,i)=><i key={i}>{p.name}</i>)}</strong><div>{FACES.map(f=><span key={f}><b style={{color:colors[f]}}>{f}</b>{a[f].label}</span>)}</div></button>;})}</div>
+      <div className="reader-cells">{group.ids.map(id=>{const o=OFFICES[id],a=displayedActions(id);return <button key={id} className={id===pos?"here":""} onClick={()=>onDetail(id)}><strong>{o.name}{isPalaceGate(id)&&<small className="reader-exclusive">殿试</small>}{exclusiveOffice(id)&&<small className="reader-exclusive">独占</small>}{game?.players.filter(p=>p.pos===id).map((p,i)=><i key={i}>{p.name}</i>)}</strong><div>{FACES.map(f=><span key={f}><b style={{color:colors[f]}}>{f}</b>{a[f].label}</span>)}</div></button>;})}</div>
     </div>}
     <div className="atlas-bottom"><span>{mode==="map"?(zoom===1?"全图总览 · 放大或切换「分衙阅读」":"滑动 / 拖动棋盘 · 点官职看判词"):"逐格判词 · 点击查看去向与依据"}</span><button onClick={()=>focusOffice(pos)}><Crosshair size={13}/>{game?"定位执子":"定位白丁"}</button></div>
     {game&&<div className="position-strip">{game.players.map((p,seat)=><button key={seat} onClick={()=>focusOffice(p.pos)}><i className={"legend "+(seat===1?"teal":"red")}/><span>{p.name}</span><strong>{OFFICES[p.pos].department} · {OFFICES[p.pos].name}</strong><Crosshair size={12}/></button>)}</div>}

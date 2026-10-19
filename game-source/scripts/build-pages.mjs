@@ -16,6 +16,7 @@ await build({
   build: { outDir: output, emptyOutDir: true, sourcemap: false },
 });
 cpSync(resolve(root, "public/icons"), resolve(output, "icons"), { recursive: true });
+cpSync(resolve(root, "public/art"), resolve(output, "art"), { recursive: true });
 cpSync(resolve(root, "public/favicon.svg"), resolve(output, "favicon.svg"));
 const manifest = JSON.parse(readFileSync(resolve(root, "public/manifest.webmanifest"), "utf8"));
 manifest.id = "./";

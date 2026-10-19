@@ -2,6 +2,7 @@
 import { OFFICES, actionsAt, officeId } from "./board";
 import { ownPlayer } from "./view";
 import type { Game, PublicGame, Seat } from "./game";
+import { careerFloor, type Degree } from "./scholar";
 
 export const EXCLUSIVE_FROM: Record<string, number> = {
   court: 0, cabinet: 3, personnel: 4, revenue: 4, rites: 4, war: 4, penalty: 4, works: 4,
@@ -35,10 +36,13 @@ export function demotionTarget(pos: number) {
   return actionsAt(pos).赃.to;
 }
 export type Landing = { intended: number; to: number; occupant: Seat | null; note: string };
-export function officeLanding(game: { players: { pos: number; name: string }[] }, seat: Seat, target: number): Landing {
+export function officeLanding(game: { players: { pos: number; name: string; degree?:Degree|null;appointed?:boolean }[];viewer?:Seat;self?:{pos:number;degree?:Degree|null;appointed?:boolean} }, seat: Seat, target: number): Landing {
+  const intended=target,player=game.viewer===seat&&game.self?game.self:game.players[seat];
+  target=careerFloor(player,target);
+  const floorNote=target!==intended?"功名不回退；转至「"+OFFICES[target].department+"·"+OFFICES[target].name+"」。":"";
   const otherSeat = (1 - seat) as Seat, other = game.players[otherSeat];
   if (!exclusiveOffice(target) || !other || other.pos !== target)
-    return { intended: target, to: target, occupant: null, note: "" };
+    return { intended, to: target, occupant: null, note: floorNote };
   // With two players there is one occupied destination; the next lower slot is free.
   // The predecessor may be a nonexclusive junior post or the next lower office group.
   const to = demotionTarget(target);

@@ -9,7 +9,7 @@ const SCORE=[62,0,69,67,65,0,62,57,60,0,65,67,69,0,67,65,62,0,57,60,62,65,67,0,6
 export default function Soundscape({game}:{game:PublicGame|null}) {
   const [open,setOpen]=useState(false),[playing,setPlaying]=useState(false),[volume,setVolume]=useState(.22),[effects,setEffects]=useState(true),[error,setError]=useState("");
   const ctx=useRef<AudioContext|null>(null), master=useRef<GainNode|null>(null), timer=useRef<ReturnType<typeof setInterval>|null>(null);
-  const nextTime=useRef(0), beat=useRef(0), shouldPlay=useRef(false), effectOn=useRef(true), previous=useRef<{seat:number;match:number;moves:number;coins:number;merit:number;risk:number}|null>(null);
+  const nextTime=useRef(0), beat=useRef(0), shouldPlay=useRef(false), effectOn=useRef(true), previous=useRef<{seat:number;match:number;moves:number;coins:number;merit:number;risk:number;learning:number;degree:string|null}|null>(null);
   function note(midi:number,time:number,length:number,gain=.12){
     const c=ctx.current,m=master.current;if(!c||!m)return;
     // Soft plucked harmonics with a low-pass filter, not a recording imitation.
@@ -38,12 +38,13 @@ export default function Soundscape({game}:{game:PublicGame|null}) {
   useEffect(()=>{const visibility=()=>{if(document.hidden)void ctx.current?.suspend();else if(shouldPlay.current)void ctx.current?.resume().then(()=>{if(ctx.current)nextTime.current=ctx.current.currentTime+.05;}).catch(()=>{setPlaying(false);shouldPlay.current=false;});};document.addEventListener("visibilitychange",visibility);return()=>{document.removeEventListener("visibilitychange",visibility);if(timer.current)clearInterval(timer.current);shouldPlay.current=false;void ctx.current?.close();};},[]);
   useEffect(()=>{
     if(!game){previous.current=null;return;}const p=game.self, old=previous.current;
-    previous.current={seat:game.viewer,match:game.match,moves:game.moves,coins:p.coins,merit:p.merit,risk:p.risk};
-    const c=ctx.current;if(!old||old.seat!==game.viewer||old.match!==game.match||old.moves===game.moves||!shouldPlay.current||!effectOn.current||!c||c.state!=="running")return;
-    const bad=p.coins<old.coins||p.risk>old.risk, good=p.coins>old.coins||p.merit>old.merit;if(!bad&&!good)return;
+    previous.current={seat:game.viewer,match:game.match,moves:game.moves,coins:p.coins,merit:p.merit,risk:p.risk,learning:p.learning,degree:p.degree};
+    const c=ctx.current;if(!old||old.seat!==game.viewer||old.match!==game.match||!shouldPlay.current||!effectOn.current||!c||c.state!=="running")return;
+    const progress=p.learning>old.learning||!!p.degree&&p.degree!==old.degree;
+    const bad=!progress&&(p.coins<old.coins||p.risk>old.risk), good=progress||p.coins>old.coins||p.merit>old.merit;if(!bad&&!good)return;
     const notes=bad?[57,53]:[74,77,81], gain=.08+economyAt(p.pos).tier*.012;
     notes.forEach((n,i)=>note(n,c.currentTime+.04+i*.16,1.1,gain));
-  },[game?.moves,game?.match,game?.viewer]);
+  },[game?.moves,game?.match,game?.viewer,game?.self.coins,game?.self.merit,game?.self.risk,game?.self.learning,game?.self.degree]);
   return <div className="soundscape"><button className="nav-button" aria-label="背景音乐与音效" aria-expanded={open} onClick={()=>setOpen(!open)}>{playing?<Music2 size={17}/>:<VolumeX size={17}/>}<span>琴音</span></button>
     {open&&<section className="sound-popover" aria-label="声音设置"><button className="sound-close" aria-label="关闭声音设置" onClick={()=>setOpen(false)}><X size={17}/></button><h3>庭前听琴</h3><p>原创五声琴音 · 点按后播放</p><button className="primary-button" onClick={()=>void toggle()}>{playing?"暂停音乐与音效":"播放琴音"}</button><label>音量 <b>{Math.round(volume*100)}%</b><input aria-label="背景音乐音量" type="range" min="0" max="0.6" step="0.01" value={volume} onChange={e=>setVolume(Number(e.target.value))}/></label><label className="sound-check"><input type="checkbox" checked={effects} onChange={e=>setEffects(e.target.checked)}/>赏罚音效</label><small>官阶越高，提示稍强；切到后台自动静音。</small>{error&&<p role="alert">{error}</p>}</section>}
   </div>;

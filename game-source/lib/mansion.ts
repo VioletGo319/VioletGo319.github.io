@@ -1,6 +1,7 @@
 import type { PublicGame } from "./game";
 import { GROUPS, OFFICES } from "./board";
 import { silverAt } from "./economy";
+import { isAcademic, LEARNING_MAX, STUDY_COST, STUDY_GAIN } from "./scholar";
 import { HASSLES, hassleAvailability, hierarchy } from "./offices";
 import { GIFTS, assignmentAt, currentEdict, giftQuote, leaderAt, type PlanInput } from "./strategy";
 
@@ -20,8 +21,9 @@ export function deskOptions(game: PublicGame, tab: DeskTab): DeskOption[] {
     });
   }
   if (tab === "work") return [
+    isAcademic(p.pos)?{id:"work",title:"寒窗课业",cost:STUDY_COST+" 两",detail:"银两 −"+STUDY_COST+" · 学识 +"+Math.min(STUDY_GAIN,LEARNING_MAX-p.learning)+"（上限 12）· 不增加政绩",plan:{kind:"work"},unavailable:p.degree?"金榜已定，待授官":p.learning>=LEARNING_MAX?"学识已满":p.coins<STUDY_COST?"银两不足，可直接掷骰":undefined}:
     { id: "work", title: assignmentAt(p.pos), cost: "免费", detail: "政绩 +" + e.workMerit + " · 银两 +" + cost(e.workCoins), plan: { kind: "work" } },
-    { id: "petition", title: "政绩请荐", cost: "3 政绩", detail: "本次功按德行进；其他骰面不退款。", plan: { kind: "petition" }, unavailable: ["court", "home"].includes(o.group) ? "三公不可请荐" : p.risk >= 3 ? "嫌疑过高" : p.recommendationBlocked ? "荐书被压" : p.merit < 3 ? "政绩不足" : undefined },
+    { id: "petition", title: "政绩请荐", cost: "3 政绩", detail: "本次功按德行进；其他骰面不退款。", plan: { kind: "petition" }, unavailable: isAcademic(p.pos)?"入仕后可请荐":["court", "home"].includes(o.group) ? "三公不可请荐" : p.risk >= 3 ? "嫌疑过高" : p.recommendationBlocked ? "荐书被压" : p.merit < 3 ? "政绩不足" : undefined },
     { id: "reflect", title: "闭门自省", cost: "免费", detail: "嫌疑 −2 · 政绩 −1，最低为 0。", plan: { kind: "reflect" }, unavailable: p.risk === 0 ? "目前清誉尚在" : undefined },
     { id: "relief", title: "赈济乡里", cost: cost(8) + " 两", detail: "政绩 +1 · 嫌疑 −2。", plan: { kind: "relief" }, unavailable: money(8) },
     { id: "support", title: "资助知己", cost: cost(10) + " 两", detail: "转给对方 " + cost(10) + " 两，双方各得 1 政绩。", plan: { kind: "support" }, unavailable: money(10) },
