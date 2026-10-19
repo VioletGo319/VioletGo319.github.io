@@ -1,12 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Download, Heart, Home, Link, LoaderCircle, RotateCcw, Share2, ShieldCheck, Sparkles, Users, Wifi, WifiOff, X } from "lucide-react";
+import PrivateRoom from "./private-room";
+import Soundscape from "./soundscape";
+import { economyAt, silverAt } from "../lib/economy";
 import ExpandedBoard from "./expanded-board";
-import StrategyPanel from "./strategy-panel";
-import ProgressPanel, { ResourceBar } from "./progress-panel";
-import OfficePanel from "./office-panel";
 import { authorityAt, exclusiveOffice, OFFICE_SCOPE, type HassleChoice } from "../lib/offices";
-import EncounterPanel from "./encounter-panel";
 import { BOARD_COUNT, GROUPS, HOME_ID, SOURCES } from "../lib/board";
 import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, REACTIONS, requestRematch, roll, prepare, resolveEvent, resolveHassle, submitDebate, upgradeGame, type Game, type PublicGame, type Seat } from "../lib/game";
 import { hasPrepared, riskBand, type PlanInput } from "../lib/strategy";
@@ -42,9 +41,10 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   const [mounted, setMounted] = useState(false);
   const lock = useRef(false), requestId = useRef(0), toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const game: PublicGame | null = local ? publicGame(local) : snapshot?.game ?? null;
+  const [localDoor, setLocalDoor] = useState("");
+  const activeSeat: Seat = local ? local.hassle?.junior ?? local.event?.seat ?? (local.debate && local.debate.bids[local.turn] ? (1-local.turn) as Seat : local.turn) : snapshot?.seat ?? 0;
+  const game: PublicGame | null = local ? publicGame(local, activeSeat) : snapshot?.game ?? null;
   const isLocal = !!local, inGame = !!game;
-  const activeSeat: Seat = isLocal && game ? game.hassle?.junior ?? game.event?.seat ?? (game.debate && game.debate.ready[game.turn] ? (1 - game.turn) as Seat : game.turn) : snapshot?.seat ?? 0;
   const canRoll = !!game && game.status === "playing" && !game.event && !game.debate && !game.hassle && (isLocal || game.turn === snapshot?.seat);
   function notify(message: string) {
     setToast(message);
@@ -89,7 +89,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     const response = await fetch(apiEndpoint + (body ? "" : "?code=" + target.code), {
       method: body ? "POST" : "GET", cache: "no-store",
       credentials: "omit",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "5" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + target.token, "X-Tongyou-Rules": "6" },
       ...(body ? { body: JSON.stringify({ ...body, code: target.code }) } : {}),
       signal: AbortSignal.timeout(12000),
     }).catch(() => { throw new Error("联机服务暂时连接不上，请检查网络后重试；也可先同屏试玩。"); });
@@ -200,48 +200,25 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   }
   const active = game?.players[activeSeat];
   const recentReaction = game?.reactions.find(r => clock - r.at < 7000);
-  return <div className="app-shell">
+  return <div className={"app-shell" + (inGame ? " room-open" : "")}>
     <header className="site-header">
       <button className="brand" aria-label="返回同游首页" onClick={() => inGame ? setModal("leave") : returnHome()}>
         <span className="brand-seal">同<br/>游</span>
         <span className="brand-name">升官图<small>与君对弈 · 共赴青云</small></span>
       </button>
       <nav aria-label="工具">
+        <Soundscape game={isLocal && localDoor!==game?.match+":"+activeSeat ? null : game}/>
         <button className="nav-button" onClick={() => setModal("rules")}><BookOpen size={16}/><span>玩法</span></button>
         <button className="nav-button install-nav" onClick={() => setModal("install")}><Download size={16}/><span>放到桌面</span></button>
       </nav>
     </header>
-    <main>
-      <div className={"page-intro " + (inGame ? "compact" : "")}>
-        <div><p className="eyebrow"><span/> {inGame ? (isLocal ? "同屏双人 · 把手机递给对方" : "天涯若比邻 · 双人雅间") : "一方棋盘 · 两处人间"}</p>
-          <h1>{inGame ? "此局，与君同游。" : <>一局升迁，<em>两人同游。</em></>}</h1>
-          {!inGame && <p className="intro-copy">从白丁应试，到三公荣归。<br className="mobile-break"/>隔着山海，也能一起掷下这一骰。</p>}</div>
-        {inGame ? <div className="room-status">
-          <span className={"connection " + (isLocal ? "local" : connection)}>{isLocal ? <Users size={14}/> : connection === "connected" ? <Wifi size={14}/> : <WifiOff size={14}/>}
-            {isLocal ? "本机试玩" : connection === "connected" ? "已同步" : connection === "offline" ? "重连中 · 棋局已保留" : "连接中"}</span>
-          {!isLocal && <button className="room-code" onClick={() => setModal("invite")}>{session?.code}<Share2 size={13}/></button>}
-        </div> : <div className="intro-stamp">闲来<br/>一局</div>}
-      </div>
-      <div className={"game-layout " + (!inGame ? "lobby-layout" : "")}>
-        <section className="board-column" aria-label="升官图棋盘">
-          <div className="board-topline"><span>{inGame ? "第 " + game.match + " 局 · 第 " + game.round + " 回合" : "功名 · 地方 · 京官 · 三公"}</span><button onClick={() => setModal("rules")}>馆藏参考与改编说明</button></div>
-          {game?.status === "playing" && <ProgressPanel game={game} seat={activeSeat} onDetail={setDetail}/>}
-          <ExpandedBoard game={game} activeSeat={activeSeat} onDetail={setDetail}/>
-          {recentReaction && <div className={"board-message seat-" + recentReaction.seat}><Heart size={13}/>{game?.players[recentReaction.seat].name}：{recentReaction.text}</div>}
-          {game && <div className="players-grid">{[0, 1].map(seat => {
-            const p = game.players[seat], turn = game.status === "playing" && game.turn === seat;
-            return <div key={seat} className={"player-card player-" + seat + (turn ? " current" : "")}>
-              <div className={"player-avatar seat-" + seat}>{seat === 0 ? "朱" : "青"}</div>
-              <div className="player-info"><strong>{p?.name || "静候知己"}{!isLocal && seat === snapshot?.seat && <small>你</small>}</strong>
-                <span>{p ? OFFICES[p.pos].name : "分享链接，邀 TA 入席"}{p && <b> · {p.coins} 两</b>}</span>{p && <small className={"player-resources " + (p.risk >= 3 ? "danger-text" : "")}>{riskBand(p.risk).label}</small>}</div>
-              <span className="player-dot" title={p && (isLocal || clock - p.lastSeen < 40000) ? "在线" : "暂离，棋局保留"} data-online={!!p && (isLocal || clock - p.lastSeen < 40000)}/>
-              {p && <div className="player-mini-meters"><ResourceBar label="政绩" value={p.merit} max={8} tone="merit"/><ResourceBar label="本衙人情" value={p.favor[OFFICES[p.pos].group] || 0} max={6} tone="favor"/><ResourceBar label="嫌疑" value={p.risk} max={6} tone={p.risk >= 3 ? "risk" : "calm"}/></div>}
-              {turn && <div className="turn-label">执骰中</div>}
-            </div>;
-          })}</div>}
-        </section>
-        <aside className="play-column">
-          {!game ? <section className="lobby-card">
+    <main className={inGame ? "mansion-main" : ""}>
+      {game ? <PrivateRoom key={game.match+":"+activeSeat} game={game} busy={busy} rolling={rolling} connection={connection} isLocal={isLocal} roomCode={session?.code}
+        onMove={(action,extra)=>void move(action,extra)} onDetail={setDetail} onInvite={()=>setModal("invite")} onBackup={()=>setModal("backup")}
+        locked={isLocal&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
+      : <><div className="page-intro"><div><p className="eyebrow"><span/> 一方棋盘 · 两间府邸</p><h1>各自筹谋，<em>与君同游。</em></h1><p className="intro-copy">私账深藏府内，官途相逢朝堂。<br/>隔着山海，也能共赴青云。</p></div><div className="intro-stamp">知己<br/>同游</div></div>
+        <div className="game-layout lobby-layout"><section className="board-column" aria-label="升官图棋盘"><div className="board-topline"><span>功名 · 地方 · 京官 · 三公</span><button onClick={()=>setModal("rules")}>玩法与改编说明</button></div><ExpandedBoard game={null} activeSeat={0} onDetail={setDetail}/></section>
+          <aside className="play-column"><section className="lobby-card">
             <div className="card-overline"><span className="small-line"/> 与君相约 <span className="small-line"/></div>
             <h2>落座，开一局。</h2><p className="muted">一人开局，一人赴约。</p>
             <div className="tabs" role="tablist" aria-label="入席方式">
@@ -264,60 +241,27 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
               {savedLocal && <button className="text-button" onClick={() => startLocal(true)}>继续上次同屏棋局</button>}
             </details>
             <button className="restore-button" onClick={() => setModal("restore")}>换了手机？用续局密钥找回</button>
-          </section> : <>
-            {game.status === "playing" && <OfficePanel game={game} seat={activeSeat} enabled={!busy && (isLocal || connection === "connected")} isLocal={isLocal} onMove={(action, extra) => void move(action, extra)}/>}
-            {game.status === "playing" && <EncounterPanel key={game.event?.id || (game.debate?.id || "last") + ":" + activeSeat} game={game} seat={activeSeat} isLocal={isLocal} enabled={!busy && (isLocal || connection === "connected")} onMove={(action,extra) => void move(action,extra)}/>}
-            <section className={"turn-card " + (game.status === "finished" ? "finished-card" : "")}>
-              {game.status === "waiting" ? <>
-                <span className="pill"><Heart size={12}/> 一席已备</span><h2>好棋，等知己。</h2>
-                <p className="muted">把邀请链接发给对方。<br/>TA 入席后，这局就开始了。</p>
-                <div className="waiting-code">{session?.code}</div>
-                <button className="primary-button" onClick={() => setModal("invite")}><Link size={17}/>邀请另一半</button>
-                <p className="card-footnote">不用一直等，回来还在这一局。</p>
-              </> : game.status === "finished" ? <>
-                <span className="pill"><Sparkles size={12}/> 荣归故里</span><h2>{game.players[game.winner!].name}胜！</h2>
-                <p className="muted">这一程青云有你相伴，<br/>下一局，再一起出发。</p>
-                <div className="victory-seal">荣<br/>归</div>
-                <button className="primary-button" onClick={() => move("rematch")} disabled={busy || (!isLocal && game.rematch.includes(activeSeat))}><RotateCcw size={16}/>{!isLocal && game.rematch.includes(activeSeat) ? "已邀再战，等对方点头" : "再同游一局"}</button>
-                {!isLocal && game.rematch.length > 0 && !game.rematch.includes(activeSeat) && <p className="card-footnote">对方已发来再战邀请。</p>}
-              </> : <>
-                <span className={"pill " + (canRoll ? "" : "quiet")}><span className="tiny-dot"/>{canRoll ? "轮到" + (isLocal ? game.players[game.turn].name : "你") + "了" : "静候 " + game.players[game.turn].name}</span>
-                <h2>{game.hassle ? "同衙风波，如何应对？" : game.event ? "先解眼前事。" : game.debate ? "朝堂上，见真章。" : canRoll ? "一掷，赴青云。" : "且饮茶，候佳音。"}</h2>
-                <div className={"dice-wrap " + (rolling ? "is-rolling" : "")}><div className={"dice " + (game.lastRoll?.face === "赃" ? "bad-face" : "")}><span>{rolling ? "运" : game.lastRoll?.face || "德"}</span><i/><i/><i/><i/></div></div>
-                <p className="last-roll" aria-live="polite">{rolling ? "古骰轻落，静候天意…" : game.lastRoll ? game.players[game.lastRoll.seat].name + "掷出「" + game.lastRoll.face + "」" + (game.lastRoll.reason ? " · " + game.lastRoll.reason + (game.lastRoll.reason === "嫌疑停升" ? "" : "按「" + game.lastRoll.effectiveFace + "」") : "") : "德才功赃，四面各有机缘"}</p>
-                {game.lastRoll?.occupancyNote && <p className="occupancy-notice">{game.lastRoll.occupancyNote}</p>}
-                {canRoll && !hasPrepared(game) && <a className="plan-shortcut" href="#strategy">可先筹谋一次：送礼 / 办差 / 朝堂争辩 ↓</a>}
-                <button className="primary-button roll-button" disabled={!canRoll || busy || (!isLocal && connection !== "connected")} onClick={() => move("roll")}>{rolling ? <LoaderCircle size={18} className="spin"/> : <><span className="dice-icon">◇</span>{game.hassle ? "先处理同衙刁难" : game.event ? "先选择事件应对" : game.debate ? "等待论策揭晓" : canRoll ? hasPrepared(game) ? "筹谋已定 · 掷骰" : "直接掷骰行运" : "等待对方掷骰"}</>}</button>
-                <div className="current-office"><span>你执子于{isLocal ? " · " + active?.name : ""}</span><button onClick={() => setDetail(active?.pos ?? 0)}>{OFFICES[active?.pos ?? 0].name}<ChevronRight size={13}/></button></div>
-                <p className="card-footnote">德 · 才 · 功 · 赃各 25%<br/>棋盘上方已列出本次助力、去向与考核预估。</p>
-              </>}
-            </section>
-            {game.status === "playing" && !game.event && !game.debate && !game.hassle && <StrategyPanel game={game} seat={activeSeat} enabled={canRoll && !busy && (isLocal || connection === "connected")} onPlan={plan => void move("prepare",{plan})}/>}
-            {!isLocal && game.players.length === 2 && <div className="reactions"><span>飞笺传情</span><div>{REACTIONS.map(text => <button key={text} disabled={busy || connection !== "connected"} onClick={() => move("react", { text })}>{text}</button>)}</div></div>}
-            <section className="journal"><div className="journal-heading"><BookOpen size={15}/><h3>此局小记</h3><small>最近 {game.logs.length} 条</small></div><ol aria-live="polite">{game.logs.map(entry => <li key={game.match + "-" + entry.id}><i className={entry.seat === 1 ? "teal" : ""}/><span>{entry.text}</span></li>)}</ol></section>
-            {!isLocal && <button className="backup-button" onClick={() => setModal("backup")}><ShieldCheck size={13}/>保存我的续局密钥</button>}
-            <button className="back-home" onClick={() => setModal("leave")}><ArrowLeft size={13}/>回到门庭</button>
-          </>}
-        </aside>
-      </div>
-      {!inGame && <section className="how-strip"><div><span>壹</span><p><strong>拜主官，谋升迁</strong><small>送礼攒人情，办差积政绩</small></p></div><div><span>贰</span><p><strong>遇风波，共进退</strong><small>文字狱、河患与御史突访</small></p></div><div><span>叁</span><p><strong>朝堂上，试锋芒</strong><small>密封论策，双人同时揭晓</small></p></div></section>}
+          </section></aside></div>
+        <section className="how-strip"><div><span>壹</span><p><strong>各有府邸，各藏私账</strong><small>政绩、嫌疑与人情仅自己可见</small></p></div><div><span>贰</span><p><strong>经营人脉，谋划仕途</strong><small>个人关系网与中央高位争夺</small></p></div><div><span>叁</span><p><strong>一屏筹谋，轻点落子</strong><small>棋盘、关系、府务随手切换</small></p></div></section></>}
     </main>
-    <footer><span>同游</span>愿隔山海的人，也有一方共同的棋盘。<button onClick={() => setModal("rules")}>参考古代升官图 · 群衙棋盘 · 研究改编</button></footer>
+    {!inGame&&<footer><span>同游</span>愿隔山海的人，也有一方共同的棋盘。<button onClick={()=>setModal("rules")}>参考古代升官图 · 研究改编</button></footer>}
     {toast && <div className="toast" role="status"><Check size={15}/>{toast}</div>}
     {(modal || detail !== null) && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) { setModal(null); setDetail(null); } }}>
       <dialog open ref={dialogRef} aria-modal="true" className="modal" aria-label={detail !== null ? "官职升降" : modal === "rules" ? "游戏规则" : "同游提示"} onKeyDown={e => { if (e.key === "Escape") { setModal(null); setDetail(null); } }}>
         <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
-        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p><p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
+        {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p><p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
+          <p><strong>各自府邸。</strong>每位玩家持自己的续局密钥进入独立视图。银两、政绩、嫌疑、人情、关系网、筹谋种类与考核私账仅本人可见；对方只能看公开官职、掷骰结果和已经发生的互动。对方的廷议投入与得分不公开，结束后仅揭晓论策和胜负。同屏试玩交接时遮挡画面，但共用设备本身不构成联机级别的数据隔离。</p>
+          <p><strong>官阶银两。</strong>按任职分为 1–5 档，府邸顶部标出倍数。初仕 ×1，一方任事 ×2，方面要职 ×3，封疆卿辅 ×4，三公 ×5。下面规则中的金额为基础金额，送礼、赈济、办差收入、掷骰赏罚、考核、事件和廷议赏银均乘本人结算前的档位；具体以按钮和仕途预览为准。援手和资助按付款者档位；同衙见礼、孝敬与三公索贿按收取者档位。每次转账双方金额一致，不足只交现有；自省和免费事件选项始终不收费。旧局已有银两不重算。</p>
           <p><strong>全图。</strong>{BOARD_COUNT} 格，{GROUPS.length - 1} 个功名 / 官署分区，加荣归终点。外层是科举和地方衙门，中层是翰林、都察、九卿与六部，中心是内阁与三公。六部在本作分别设署。</p>
           <p><strong>开局。</strong>两人从白丁、20 两银子出发，朱砂先手，轮流执骰。再战轮换先手。白丁逢德到监生、逢才到案首、逢功到童生、逢赃不动。</p>
           <p><strong>掷骰。</strong>「德、才、功、赃」各 25%。按当前格的判词直接跳到指定官职，可能跨衙、外放或入阁。功多数留任；各格均有自己的四项去向。点击官职即可查看，彩色箭头显示含卡位后的实际去向。</p>
           <p><strong>每回合筹谋。</strong>掷骰前可选一次送礼、办差、政绩请荐、赈济、自省、资助、参奏、同衙刁难或发起争辩，也可直接掷骰。筹谋后仍需掷骰结束本回合；事件处理不占这次筹谋。政绩上限 8、嫌疑上限 6、每衙人情上限 6，最低均为 0。</p>
           <p><strong>拜谒送礼。</strong>入仕后向本衙主官送清茶（5 两 / 1 人情 / 0 嫌疑）、书画（10 两 / 2 人情 / 1 嫌疑）、珍玩（20 两 / 3 人情 / 2 嫌疑）。投其所好额外 +1 人情；清正主官拒收珍玩且不扣款。本衙人情满 3（荐贤期为 2），掷「才」可消耗人情改按「德」迁职；政绩也达 4 时，掷「功」可消耗 2 政绩和所需人情，合荐按「德」迁职。嫌疑 ≥3 暂停送礼和所有举荐。人情分衙存放；已是本衙主官则拜谒上级。只有双方处在同一中央高阶官署，且对方占据受礼官位时，礼金才转给对方，含嫌疑的礼物也使对方嫌疑 +1。地方官的拜谒面向各自所在地的虚拟主官，不向另一位玩家转账。功名阶段与三公不设拜谒。</p>
           <p><strong>办差与请荐。</strong>办差通常 +2 政绩、4 两。政绩 ≥4 时，掷「功」自动按「才」迁职，触发时消耗 2 政绩；去向未变不扣资源。花 3 政绩请荐，本次掷「功」改按「德」，其余结果不变且不退款，三公不可用。嫌疑必须低于 3 才能获得助力或请荐。赈济花 8 两，政绩 +1、嫌疑 -2；闭门自省不花银两，嫌疑 -2、政绩 -1（最低为 0），同样占一次筹谋。资助转给对方 10 两，双方各 +1 政绩。原始骰面为「功」额外 +1 政绩；入仕后掷「赃」增加 1 嫌疑。</p>
-          <p><strong>考核与查办。</strong>每 6 次落子考核双方，先处理嫌疑：3 点时罚最多 6 两、政绩 -1、各衙人情 -1、嫌疑降至 2，不发考绩赏；4–5 点罚最多 20 两、降一职、政绩 -2、人情清空、嫌疑降至 2；6 点罚最多 30 两、降两职、政绩 -4、人情清空、嫌疑降至 3。嫌疑 ≥4 时，德才功全部留任且无赏银，连太师荣归也会被拦住。嫌疑低于 3 且政绩 ≥4，考核消耗 4 政绩、赏 12 两，按「才」迁职；若本衙人情足够，再消耗举荐所需人情改按「德」迁职。三公仅领赏、留任，不可借考核荣归。每两次考核，主官换喜好、各衙人情另减 1。对方嫌疑 ≥3，可花 2 政绩参奏：罚最多 16 两、降一职、政绩 -2、人情清空、嫌疑降至 2；对方嫌疑为 6 则按重案处罚。所有扣款不超过现有资源。</p>
+          <p><strong>考核与查办。</strong>每 6 次落子考核双方，先处理嫌疑：3 点时罚最多 6 两、政绩 -1、各衙人情 -1、嫌疑降至 2，不发考绩赏；4–5 点罚最多 20 两、降一职、政绩 -2、人情清空、嫌疑降至 2；6 点罚最多 30 两、降两职、政绩 -4、人情清空、嫌疑降至 3。嫌疑 ≥4 时，德才功全部留任且无赏银，连太师荣归也会被拦住。嫌疑低于 3 且政绩 ≥4，考核消耗 4 政绩、赏 12 两，按「才」迁职；若本衙人情足够，再消耗举荐所需人情改按「德」迁职。三公仅领赏、留任，不可借考核荣归。每两次考核，主官换喜好、各衙人情另减 1。密折参奏不显示对方嫌疑，先花 2 政绩并占用筹谋；对方嫌疑不足 3 时不获采纳、自身嫌疑 +1；达到 3 才查办：罚最多 16 两、降一职、政绩 -2、人情清空、嫌疑降至 2；对方嫌疑为 6 则按重案处罚。所有扣款不超过现有资源。</p>
           <p><strong>随机遭遇。</strong>每次未荣归的落子后，独立 30% 触发事件；文字狱风波、河患急报、驿站失文、岁末余银、雅集相邀、御史临门各占 5%。先由当事人选择应对，再继续下一位回合。每件事都有无需银两或政绩的选项。文字狱是架空的受牵连情节；对方也可自愿花 8 两援手，双方各 +1 政绩。不设置死亡或永久出局。</p>
-          <p><strong>朝堂争辩。</strong>发起后双方暗选「典章 / 民情 / 实务」，投入 0–2 政绩。典章克民情，民情克实务，实务克典章。得分 = 投入 + 克制 2 分 + 本题官署专长 1 分。双方提交才揭晓和扣款；胜者 +2 政绩、10 两，入仕者本衙人情 +1，另一方 +1 政绩；平局各 +1 政绩、4 两。未提交的一方可推辞，不扣双方投入，但发起者的筹谋已用。每间每 6 次落子最多发起一次。</p>
+          <p><strong>朝堂争辩。</strong>发起后双方暗选「典章 / 民情 / 实务」，投入 0–2 政绩。典章克民情，民情克实务，实务克典章。得分 = 投入 + 克制 2 分 + 本题官署专长 1 分。双方提交才揭晓论策与胜负并扣款；投入与具体得分各自保密；胜者 +2 政绩、10 两，入仕者本衙人情 +1，另一方 +1 政绩；平局各 +1 政绩、4 两。未提交的一方可推辞，不扣双方投入，但发起者的筹谋已用。每间每 6 次落子最多发起一次。</p>
           <p><strong>中央高位卡位。</strong>{OFFICE_SCOPE}这些格位一职一人。目标被占时，后来者退到该格前一级；该区最低格则沿棋盘退职路线落位。不挤走先到者，不会跳过上级坐更高位。功名、地方官和未达门槛的京官允许同格。落子、考核、参奏降职和事件都执行卡位。自动助力若因占位未改变实际去向，不扣助力资源；已预付的请荐费用不退。卡位留在原位不领升迁赏银，原始功加政绩、赃罚银仍生效。考核先按同一份资源快照判定，再依次落位；每期轮换处理先后。考核被卡位仍扣 4 政绩、领 12 两赏银；合荐未改善落点则不扣人情。</p>
           <p><strong>同衙相逢。</strong>双方都达到上述中央高位门槛，并且属于同一官署，才成立上下级。九卿按具体寺署区分，六部各自独立。进入新位后同衙不同职，低位者送见面礼最多 10 两；原位留任不重复送。地方官视作在不同地方任职，无双方同衙关系、见面礼或刁难。</p>
           <p><strong>上级刁难。</strong>中央同衙上级可用本回合筹谋，花 1 政绩、自增 1 嫌疑，选择加派差事、索取孝敬或压住荐书；全局每 6 次落子最多一次，嫌疑 ≥4 的上级不能发起。下级照办时分别损失最多 2 政绩、向上级交最多 6 两，或下次本人掷骰禁用助力（不影响普通判词和考核）。也可花 2 本衙人情斡旋，或花 2 政绩申诉，使上级再加 2 嫌疑、扣 1 政绩并撤销刁难。应对不占下级自己的筹谋；上级可主动撤回，原成本和冷却不退。处理后仍由上级完成本次掷骰。</p>
@@ -338,7 +282,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
           <button className="primary-button" onClick={share}><Share2 size={17}/>分享邀请</button><button className="secondary-button" onClick={() => copy(inviteLink(), "邀请链接已复制。")}><Copy size={16}/>复制邀请链接</button>
         </> :
         modal === "backup" ? <><p className="eyebrow">留一把回来的钥匙</p><h2>你的续局密钥</h2><p className="muted">换手机、浏览器或桌面 App 时，用它找回你的席位。对方入席用邀请链接，不用这把钥匙。</p><code className="recovery-code">{session?.code + "." + session?.token}</code><button className="primary-button" onClick={() => copy(session?.code + "." + session?.token, "续局密钥已复制，请保存到自己的备忘录。")}><Copy size={16}/>复制并自行保存</button><p className="fine-print">持有此密钥的人可以代你落子，请勿发送给他人。</p></> :
-        modal === "restore" ? <><p className="eyebrow">旧局未散，等君归来</p><h2>找回你的席位</h2><label htmlFor="recovery">粘贴自己的续局密钥</label><textarea id="recovery" value={recovery} onChange={e => setRecovery(e.target.value)} placeholder="雅间号.续局密钥" rows={4} spellCheck={false}/><button className="primary-button" disabled={busy} onClick={() => { const [c, t] = recovery.trim().split("."); if (!/^[A-Z2-9]{8}$/.test(c || "") || !/^[a-f0-9]{64}$/.test(t || "")) { notify("密钥格式不正确，请完整复制。"); return; } void resume({ code: c, token: t }); }}>回到棋局<ArrowRight size={16}/></button><p className="fine-print">在旧设备的棋局下方，点「保存我的续局密钥」。</p></> :
+        modal === "restore" ? <><p className="eyebrow">旧局未散，等君归来</p><h2>找回你的席位</h2><label htmlFor="recovery">粘贴自己的续局密钥</label><textarea id="recovery" value={recovery} onChange={e => setRecovery(e.target.value)} placeholder="雅间号.续局密钥" rows={4} spellCheck={false}/><button className="primary-button" disabled={busy} onClick={() => { const [c, t] = recovery.trim().split("."); if (!/^[A-Z2-9]{8}$/.test(c || "") || !/^[a-f0-9]{64}$/.test(t || "")) { notify("密钥格式不正确，请完整复制。"); return; } void resume({ code: c, token: t }); }}>回到棋局<ArrowRight size={16}/></button><p className="fine-print">在旧设备府邸右上角，点钥匙图标保存自己的续局密钥。</p></> :
         modal === "leave" ? <><p className="eyebrow">暂歇片刻</p><h2>回到门庭？</h2><p className="muted">这一局会保留。回来后，点「继续上次{isLocal ? "同屏棋局" : "雅间"}」即可续玩。</p><button className="primary-button" onClick={returnHome}>保存并返回<ArrowLeft size={16}/></button><button className="secondary-button" onClick={() => setModal(null)}>留在棋盘</button></> : null}
       </dialog>
     </div>}

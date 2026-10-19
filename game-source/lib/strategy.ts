@@ -1,5 +1,7 @@
 /** Authored strategy expansion. Historical inspirations are cited in board.SOURCES. */
 import { GROUPS, OFFICES, actionsAt, officeId, type Face, type Action } from "./board";
+import { ownPlayer } from "./view";
+import { silverAt, moneyText } from "./economy";
 import type { Game, PublicGame, Seat } from "./game";
 import { demotionTarget, officeLanding, sameAuthority, type HassleKind } from "./offices";
 export { demotionTarget } from "./offices";
@@ -48,12 +50,12 @@ export function giftQuote(game: Game | PublicGame, seat: Seat, id: GiftId) {
   if (!gift) throw new Error("请选择礼物。");
   const leader = leaderAt(game, seat);
   if (!leader) throw new Error("入仕后才能拜谒主官；三公与荣归不设此玩法。");
-  return { ...gift, leader, favor: gift.favor + (leader.personality.likes === id ? 1 : 0),
+  return { ...gift, cost: silverAt(game.players[seat].pos, gift.cost), leader, favor: gift.favor + (leader.personality.likes === id ? 1 : 0),
     risk: gift.risk + currentEdict(game).giftRisk,
     refused: leader.personality.name === "清正" && id === "treasure" };
 }
 function rawRollPreview(game: Game | PublicGame, seat: Seat, face: Face) {
-  const p = game.players[seat], o = OFFICES[p.pos];
+  const p = ownPlayer(game, seat), o = OFFICES[p.pos];
   const actions = actionsAt(p.pos), base = actions[face];
   const unchanged = { action: base, effectiveFace: face, reason: "", favorCost: 0, meritCost: 0, blocked: false };
   // At four suspicion, even a real 德 cannot advance or retire at 太师.
@@ -95,9 +97,10 @@ export function riskBand(value: number) {
   if (value >= 3) return { label: "举荐受阻", level: "warning", detail: "不能送礼、请荐或获升迁助力；考核罚最多 6 两、政绩 −1、各衙人情 −1。" };
   return { label: "清誉尚在", level: "safe", detail: "升迁助力正常；3 点封举荐，4 点停升，6 点重罚。" };
 }
-export function investigationQuote(suspicion: number, cause: "review" | "impeach" | "inspection" = "review") {
-  return suspicion >= 6 ? { fine: 30, steps: 2, meritLoss: 4, riskAfter: 3 }
+export function investigationQuote(suspicion: number, cause: "review" | "impeach" | "inspection" = "review", pos = 0) {
+  const base = suspicion >= 6 ? { fine: 30, steps: 2, meritLoss: 4, riskAfter: 3 }
     : { fine: cause === "review" ? 20 : 16, steps: 1, meritLoss: 2, riskAfter: 2 };
+  return { ...base, fine: silverAt(pos, base.fine) };
 }
 export function lowerOffice(pos: number, steps: number) {
   for (let i = 0; i < steps; i++) pos = demotionTarget(pos);
@@ -105,23 +108,23 @@ export function lowerOffice(pos: number, steps: number) {
 }
 /** Shared by the forecast and server settlement; no independent UI rules. */
 function rawReviewPreview(game: Game | PublicGame, seat: Seat) {
-  const p = game.players[seat], group = OFFICES[p.pos].group, favorCost = currentEdict(game).favorCost;
+  const p = ownPlayer(game, seat), group = OFFICES[p.pos].group, favorCost = currentEdict(game).favorCost;
   const result = { kind: "steady", title: "平稳留任", to: p.pos, coins: 0, merit: 0, riskAfter: p.risk,
     favorCost: 0, favorDecay: 0, clearFavor: false, detail: "政绩未满 4，继续积累；资源保留。" };
   if (p.risk >= 4) {
-    const penalty = investigationQuote(p.risk), to = lowerOffice(p.pos, penalty.steps);
+    const penalty = investigationQuote(p.risk, "review", p.pos), to = lowerOffice(p.pos, penalty.steps);
     return { ...result, kind: "penalty", title: p.risk >= 6 ? "重案查办" : "考核查办", to,
       coins: -Math.min(p.coins, penalty.fine), merit: -Math.min(p.merit, penalty.meritLoss), clearFavor: true, riskAfter: penalty.riskAfter,
       detail: "罚最多 " + penalty.fine + " 两，降 " + penalty.steps + " 职至「" + OFFICES[to].name + "」，政绩 −" + penalty.meritLoss + "，人情清空；嫌疑降至 " + penalty.riskAfter + "。" };
   }
-  if (p.risk === 3) return { ...result, kind: "warning", title: "考核申诫", coins: -Math.min(p.coins, 6), merit: -Math.min(p.merit, 1), favorDecay: 1, riskAfter: 2,
-    detail: "留任，罚最多 6 两、政绩 −1、各衙人情 −1；嫌疑降至 2，不发考绩赏。" };
+  if (p.risk === 3) return { ...result, kind: "warning", title: "考核申诫", coins: -Math.min(p.coins, silverAt(p.pos, 6)), merit: -Math.min(p.merit, 1), favorDecay: 1, riskAfter: 2,
+    detail: "留任，罚最多 " + silverAt(p.pos, 6) + " 两、政绩 −1、各衙人情 −1；嫌疑降至 2，不发考绩赏。" };
   if (p.merit >= 4) {
     const court = ["court", "home"].includes(group);
     const joint = !court && group !== "origin" && (p.favor[group] || 0) >= favorCost;
     const to = court ? p.pos : actionsAt(p.pos)[joint ? "德" : "才"].to;
-    return { ...result, kind: "reward", title: joint ? "考绩合荐" : "考核卓异", to, coins: 12, merit: -4, favorCost: joint ? favorCost : 0,
-      detail: "消耗 4 政绩" + (joint ? "及本衙 " + favorCost + " 人情" : "") + "，赏 12 两；" + (court ? "三公留任，仍须凭原始「德」晋升或荣归。" : "按「" + (joint ? "德" : "才") + "」迁至「" + OFFICES[to].name + "」。") };
+    return { ...result, kind: "reward", title: joint ? "考绩合荐" : "考核卓异", to, coins: silverAt(p.pos, 12), merit: -4, favorCost: joint ? favorCost : 0,
+      detail: "消耗 4 政绩" + (joint ? "及本衙 " + favorCost + " 人情" : "") + "，赏 " + silverAt(p.pos, 12) + " 两；" + (court ? "三公留任，仍须凭原始「德」晋升或荣归。" : "按「" + (joint ? "德" : "才") + "」迁至「" + OFFICES[to].name + "」。") };
   }
   return result;
 }
@@ -129,7 +132,7 @@ export function reviewOrder(game: Game | PublicGame): Seat[] {
   const first = ((game.strategy.era + game.match - 1) % 2) as Seat;
   return [first, (1 - first) as Seat].filter(seat => !!game.players[seat]);
 }
-export function reviewPreviews(game: Game | PublicGame) {
+export function reviewPreviews(game: Game) {
   const verdicts = game.players.map((_, seat) => rawReviewPreview(game, seat as Seat));
   const positions = { players: game.players.map(p => ({ ...p })) };
   const results = verdicts.map(v => ({ ...v, landing: { intended: v.to, to: v.to, occupant: null, note: "" } as ReturnType<typeof officeLanding> }));
@@ -140,7 +143,7 @@ export function reviewPreviews(game: Game | PublicGame) {
       const normal = officeLanding(positions, seat, normalTo);
       if (landing.to === from || landing.to === normal.to) {
         v = { ...v, title: "考核卓异", to: normalTo, favorCost: 0,
-          detail: "消耗 4 政绩，赏 12 两，按「才」迁至「" + OFFICES[normalTo].name + "」；合荐未增加实际去向，不扣人情。" };
+          detail: "消耗 4 政绩，赏 " + silverAt(from, 12) + " 两，按「才」迁至「" + OFFICES[normalTo].name + "」；合荐未增加实际去向，不扣人情。" };
         landing = normal;
       }
     }
@@ -150,7 +153,20 @@ export function reviewPreviews(game: Game | PublicGame) {
   }
   return results;
 }
-export function reviewPreview(game: Game | PublicGame, seat: Seat) { return reviewPreviews(game)[seat]; }
+export function reviewPreview(game: Game | PublicGame, seat: Seat) {
+  if (!("viewer" in game)) return reviewPreviews(game)[seat];
+  // A private forecast uses this player's resources and current public positions
+  // only. Never simulate the opponent's future review from their hidden ledger.
+  let v = rawReviewPreview(game, seat), landing = officeLanding(game, seat, v.to);
+  if (v.favorCost) {
+    const from = game.players[seat].pos, to = actionsAt(from).才.to, normal = officeLanding(game, seat, to);
+    if (landing.to === from || landing.to === normal.to) {
+      v = { ...v, title: "考核卓异", to, favorCost: 0, detail: "消耗 4 政绩，赏 " + silverAt(from,12) + " 两，按「才」迁职；当前占位下合荐无收益，不扣人情。" };
+      landing = normal;
+    }
+  }
+  return { ...v, to: landing.to, landing, detail: v.detail + landing.note };
+}
 const ASSIGNMENTS: Record<string, string> = {
   origin: "寒窗课业", county: "清理县册", state: "修缮乡学", prefecture: "巡查粮仓", capitalCounty: "巡检坊市",
   capitalPrefecture: "疏理京畿", finance: "核实钱粮", justice: "复核刑案", province: "督办河工", hanlin: "修史校书",

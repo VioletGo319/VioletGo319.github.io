@@ -168,9 +168,31 @@ for (let i=0;i<3;i++) {
   };
 }
 tables[HOME_ID]=Object.fromEntries(FACES.map(f=>[f,{to:HOME_ID,coins:0,label:"已荣归",short:"已荣归",kind:"stay"}])) as Record<Face,Action>;
+export function economyAt(pos: number) {
+  const o = OFFICES[pos];
+  let tier = 1;
+  if (["court", "home"].includes(o.group)) tier = 5;
+  else if (o.group === "cabinet") tier = o.order >= 3 ? 4 : 3;
+  else if (o.group === "province") tier = o.order >= 2 ? 4 : 3;
+  else if (["finance", "justice"].includes(o.group)) tier = o.order >= 2 ? 3 : 2;
+  else if (["prefecture", "capitalPrefecture"].includes(o.group)) tier = o.order >= 3 ? 3 : 2;
+  else if (["county", "state", "capitalCounty"].includes(o.group)) tier = o.order >= 2 ? 2 : 1;
+  else if (o.group !== "origin") {
+    const threshold = o.group === "hanlin" ? 6 : o.group === "censor" || o.group === "temples" ? 3 : 4;
+    tier = o.order >= threshold ? 4 : o.order >= 2 ? 3 : 2;
+  }
+  return { tier, multiplier: tier, title: ["", "寒窗初仕", "一方任事", "方面要职", "封疆卿辅", "三公之尊"][tier] };
+}
+
 export function actionsAt(position:number): Record<Face,Action> {
   if (!Number.isInteger(position) || !tables[position]) throw new Error("棋子位置无效，请重新同步。");
-  return tables[position];
+  const multiplier = economyAt(position).multiplier;
+  return Object.fromEntries(FACES.map(face => {
+    const a = tables[position][face];
+    return [face, { ...a, coins: a.coins * multiplier,
+      ...(a.tribute ? { tribute: a.tribute * multiplier, short: "索贿 " + a.tribute * multiplier + " 两" } : {}),
+      label: a.label.replace(/(\d+)\s*两/g, (_, n) => Number(n) * multiplier + " 两") }];
+  })) as Record<Face, Action>;
 }
 export function officeRect(id:number) {
   const o=OFFICES[id], g=GROUPS.find(g=>g.key===o.group)!;

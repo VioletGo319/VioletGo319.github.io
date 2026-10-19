@@ -1,5 +1,6 @@
 /** Authored high-office rules. Local titles represent separate jurisdictions. */
 import { OFFICES, actionsAt, officeId } from "./board";
+import { ownPlayer } from "./view";
 import type { Game, PublicGame, Seat } from "./game";
 
 export const EXCLUSIVE_FROM: Record<string, number> = {
@@ -34,7 +35,7 @@ export function demotionTarget(pos: number) {
   return actionsAt(pos).赃.to;
 }
 export type Landing = { intended: number; to: number; occupant: Seat | null; note: string };
-export function officeLanding(game: Pick<Game | PublicGame, "players">, seat: Seat, target: number): Landing {
+export function officeLanding(game: { players: { pos: number; name: string }[] }, seat: Seat, target: number): Landing {
   const otherSeat = (1 - seat) as Seat, other = game.players[otherSeat];
   if (!exclusiveOffice(target) || !other || other.pos !== target)
     return { intended: target, to: target, occupant: null, note: "" };
@@ -52,7 +53,7 @@ export const HASSLES = [
 export type HassleKind = typeof HASSLES[number]["id"];
 export type HassleChoice = "comply" | "favor" | "appeal" | "withdraw";
 export function hassleAvailability(game: Game | PublicGame, seat: Seat) {
-  const relation = hierarchy(game), p = game.players[seat];
+  const relation = hierarchy(game), p = ownPlayer(game, seat);
   if (!relation) return "双方须同在一个中央高阶官署；地方官和不同寺署不成立上下级关系。";
   if (relation.senior !== seat) return "你目前是下级，可以积累政绩、人情应对，或在对方嫌疑足够时参奏。";
   if (p.risk >= 4) return "你正在停升待查，不能向下级施压。";

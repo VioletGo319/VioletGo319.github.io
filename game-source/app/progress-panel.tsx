@@ -3,6 +3,7 @@ import { ArrowUpRight, Coins, ShieldAlert, Sparkles } from "lucide-react";
 import { FACES, OFFICES, actionsAt } from "../lib/board";
 import type { PublicGame, Seat } from "../lib/game";
 import { currentEdict, reviewOrder, reviewPreview, riskBand, rollPreview, turnsToReview } from "../lib/strategy";
+import { ownPlayer } from "../lib/view";
 import { exclusiveOffice } from "../lib/offices";
 
 export function ResourceBar({ label, value, max, tone, hint }: {
@@ -16,7 +17,7 @@ export function ResourceBar({ label, value, max, tone, hint }: {
   </div>;
 }
 export default function ProgressPanel({ game, seat, onDetail }: { game: PublicGame; seat: Seat; onDetail: (id: number) => void }) {
-  const p = game.players[seat], office = OFFICES[p.pos], favor = p.favor[office.group] || 0;
+  const p = ownPlayer(game, seat), office = OFFICES[p.pos], favor = p.favor[office.group] || 0;
   const edict = currentEdict(game), band = riskBand(p.risk), review = reviewPreview(game, seat);
   const outcomes = FACES.map(face => ({ face, ...rollPreview(game, seat, face) }));
   const helped = outcomes.filter(o => o.effectiveFace !== o.face).length;
@@ -47,7 +48,7 @@ export default function ProgressPanel({ game, seat, onDetail }: { game: PublicGa
     <p className="route-disclaimer">已计算高位卡位，列出实际第一步落点；之后仍可能相逢、考核或遇事。「获助力」表示判词改变，骰面概率始终各 25%。</p>
     <div className={"review-forecast " + review.kind}>
       <div className="review-count"><strong>{turnsToReview(game)}</strong><small>次落子后考核</small></div>
-      <div><h4>{review.kind === "penalty" || review.kind === "warning" ? <ShieldAlert size={15}/> : <Sparkles size={15}/>}当前预估 · {review.title}</h4><p>{review.detail}</p><small>按当前资源与占位计算，本期先处理{game.players[reviewOrder(game)[0]].name}；下一次落子或遭遇后更新。{game.strategy.era % 2 === 1 ? "本次考核后另有主官轮调，各衙人情再 −1。" : ""}</small></div>
+      <div><h4>{review.kind === "penalty" || review.kind === "warning" ? <ShieldAlert size={15}/> : <Sparkles size={15}/>}当前预估 · {review.title}</h4><p>{review.detail}</p><small>仅按你的资源与双方当前官职预估，本期先处理{game.players[reviewOrder(game)[0]].name}；不推测对方考核。实际落位可能变化。{game.strategy.era % 2 === 1 ? "本次考核后另有主官轮调，各衙人情再 −1。" : ""}</small></div>
     </div>
     <div className="suspicion-track" aria-label="嫌疑惩罚阶梯">{[["0–2", "正常", p.risk < 3], ["3", "封举荐", p.risk === 3], ["4–5", "停升 · 降一职", p.risk >= 4 && p.risk < 6], ["6", "重罚 · 降两职", p.risk === 6]].map(([n, label, active]) => <div key={String(n)} className={active ? "active" : ""}><b>{n}</b><span>{label}</span>{active && <i>当前</i>}</div>)}</div>
     {p.risk >= 3 && <p className="risk-remedy"><ShieldAlert size={14}/><span>{band.detail} 到「办差经营」选择闭门自省：0 两、嫌疑 −2、政绩 −1，最低为 0。</span></p>}
