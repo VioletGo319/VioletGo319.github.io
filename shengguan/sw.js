@@ -1,7 +1,7 @@
 const ROOT = new URL("./", self.location.href);
 const PREFIX = "tongyou-pages-" + encodeURIComponent(ROOT.pathname) + "-";
-const CACHE = PREFIX + "c8ce4b9086952ecf";
-const ASSETS = ["./art/jade-courtyard-v1.webp","./assets/index-DpfAzlzK.css","./assets/index-Y9ISscFp.js","./favicon.svg","./icons/apple-touch-icon.png","./icons/icon-192.png","./icons/icon-512.png","./icons/maskable-512.png","./index.html","./manifest.webmanifest"].map(path => new URL(path, ROOT).href);
+const CACHE = PREFIX + "b5f086e54e0ef1fe";
+const ASSETS = ["./art/jade-courtyard-v1.webp","./assets/index-BfOityU5.js","./assets/index-CJPxV_oe.css","./favicon.svg","./icons/apple-touch-icon.png","./icons/icon-192.png","./icons/icon-512.png","./icons/maskable-512.png","./index.html","./manifest.webmanifest"].map(path => new URL(path, ROOT).href);
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
   self.skipWaiting();

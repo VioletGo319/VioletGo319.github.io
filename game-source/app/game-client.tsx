@@ -11,6 +11,7 @@ import { actionsAt, addPlayer, FACES, makePlayer, newGame, OFFICES, publicGame, 
 import { hasPrepared, riskBand, type PlanInput } from "../lib/strategy";
 import { randomInt, type DebateBid } from "../lib/encounters";
 import { appointmentAction, isPalaceGate } from "../lib/scholar";
+import { applyBotMove, botMayAct, BOT_NAME, chooseBotMove, SOLO_STORE } from "../lib/bot";
 
 type Snapshot = { code: string; version: number; seat: Seat; game: PublicGame; serverTime: number };
 type Session = { code: string; token: string };
@@ -25,8 +26,13 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   const [saved, setSaved] = useState<Session | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [local, setLocal] = useState<Game | null>(null);
+  const localRef = useRef<Game | null>(null);
+  const [solo, setSolo] = useState(false);
+  const [savedSolo, setSavedSolo] = useState(false);
+  const [botPaused, setBotPaused] = useState(false);
+  const [foreground, setForeground] = useState(true);
   const [savedLocal, setSavedLocal] = useState(false);
-  const [tab, setTab] = useState<"create" | "join">("create");
+  const [tab, setTab] = useState<"create" | "join" | "solo">("create");
   const [name, setName] = useState("");
   const [partner, setPartner] = useState("");
   const [code, setCode] = useState("");
@@ -43,10 +49,11 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   const lock = useRef(false), requestId = useRef(0), toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [localDoor, setLocalDoor] = useState("");
-  const activeSeat: Seat = local ? local.exam?.seat ?? local.hassle?.junior ?? local.event?.seat ?? (local.debate && local.debate.bids[local.turn] ? (1-local.turn) as Seat : local.turn) : snapshot?.seat ?? 0;
+  const activeSeat: Seat = local ? solo ? 0 : local.exam?.seat ?? local.hassle?.junior ?? local.event?.seat ?? (local.debate && local.debate.bids[local.turn] ? (1-local.turn) as Seat : local.turn) : snapshot?.seat ?? 0;
   const game: PublicGame | null = local ? publicGame(local, activeSeat) : snapshot?.game ?? null;
   const isLocal = !!local, inGame = !!game;
-  const canRoll = !!game && game.status === "playing" && !game.event && !game.debate && !game.hassle && (isLocal || game.turn === snapshot?.seat);
+  const botThinking = !!(solo && local && !botPaused && foreground && !busy && !modal && detail === null && botMayAct(publicGame(local, 1)));
+  function updateLocal(next: Game | null) { localRef.current = next; setLocal(next); }
   function notify(message: string) {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -60,16 +67,36 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
       if (old && /^[A-Z2-9]{8}$/.test(old.code) && /^[a-f0-9]{64}$/.test(old.token)) setSaved(old);
       const localOld = JSON.parse(readStore(LOCAL) || "null");
       setSavedLocal(!!localOld?.players?.length);
+      const soloOld = JSON.parse(readStore(SOLO_STORE) || "null");
+      setSavedSolo(soloOld?.players?.length === 2);
     } catch { /* Ignore malformed local preferences. */ }
     const invite = new URLSearchParams(location.hash.slice(1)).get("room");
     if (invite) { setCode(invite.toUpperCase()); setTab("join"); }
     const install = (e: Event) => { e.preventDefault(); setInstallEvent(e as InstallEvent); };
     window.addEventListener("beforeinstallprompt", install);
+    const visibility = () => setForeground(document.visibilityState !== "hidden");
+    visibility(); document.addEventListener("visibilitychange", visibility);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register(appBase + "sw.js", { scope: appBase }).catch(() => {});
     const tick = setInterval(() => setClock(Date.now()), 1000);
-    return () => { clearInterval(tick); window.removeEventListener("beforeinstallprompt", install); };
+    return () => { clearInterval(tick); window.removeEventListener("beforeinstallprompt", install); document.removeEventListener("visibilitychange", visibility); };
   }, []);
-  useEffect(() => { if (local) { saveStore(LOCAL, local); setSavedLocal(true); } }, [local]);
+  useEffect(() => { if (local) { saveStore(solo ? SOLO_STORE : LOCAL, local); if(solo)setSavedSolo(true); else setSavedLocal(true); } }, [local, solo]);
+  useEffect(() => {
+    if (!botThinking || !local) return;
+    const expected = local;
+    const timer = setTimeout(() => {
+      if (lock.current || localRef.current !== expected) return;
+      lock.current = true;
+      try {
+        const decision = chooseBotMove(publicGame(expected, 1));
+        if (decision) updateLocal(applyBotMove(expected, 1, decision));
+      } catch (error) {
+        setBotPaused(true);
+        notify(error instanceof Error ? "人机已暂停：" + error.message : "人机已暂停，可点继续重试。");
+      } finally { lock.current = false; }
+    }, local.event ? 1600 : 1050);
+    return () => clearTimeout(timer);
+  }, [local, botThinking]);
   useEffect(() => {
     if (!modal && detail === null) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -128,7 +155,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     try {
       const data = await api(target, { action: kind, name: name.trim() });
       target.code = data.code;
-      saveStore(STORE, target); setSaved(target); setLocal(null); setSnapshot(data); setSession(target); setConnection("connected");
+      saveStore(STORE, target); setSaved(target); updateLocal(null); setSolo(false); setSnapshot(data); setSession(target); setConnection("connected");
       try { localStorage.setItem("tongyou-name", name.trim()); } catch {}
       history.replaceState(null, "", appBase + "#room=" + target.code);
       if (kind === "create") setModal("invite");
@@ -140,21 +167,27 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     lock.current = true; setBusy(true);
     try {
       const data = await api(target);
-      setLocal(null); setSnapshot(data); setSession(target); setSaved(target);
+      updateLocal(null); setSolo(false); setSnapshot(data); setSession(target); setSaved(target);
       saveStore(STORE, target); setConnection("connected"); setModal(null);
       history.replaceState(null, "", appBase + "#room=" + target.code);
     } catch (error) { notify(error instanceof Error ? error.message : "续局失败，请核对密钥。"); }
     finally { lock.current = false; setBusy(false); }
   }
-  function startLocal(continueOld = false) {
+  function startLocal(continueOld = false, single = false) {
+    if (lock.current) return;
     try {
+      let next:Game;
       if (continueOld) {
-        const old = JSON.parse(readStore(LOCAL) || "null");
-        if (old?.players?.length === 2) { setSession(null); setSnapshot(null); setLocal(upgradeGame(old)); return; }
+        const old = JSON.parse(readStore(single ? SOLO_STORE : LOCAL) || "null");
+        if (old?.players?.length !== 2) throw new Error("未找到这份棋局，请重新开局。");
+        next = upgradeGame(old);
+      } else {
+        const first = name.trim() || "朱砂客", second = single ? BOT_NAME : partner.trim() || "青玉客";
+        next = addPlayer(newGame(makePlayer(first)), makePlayer(second));
       }
-      const first = name.trim() || "朱砂客", second = partner.trim() || "青玉客";
-      setLocal(addPlayer(newGame(makePlayer(first)), makePlayer(second)));
+      setSolo(single); setBotPaused(false); setLocalDoor(""); updateLocal(next);
       setSession(null); setSnapshot(null); setModal(null);
+      try { localStorage.setItem("tongyou-name", next.players[0].name); } catch {}
       history.replaceState(null, "", appBase);
     } catch (error) { notify(error instanceof Error ? error.message : "请核对名字。"); }
   }
@@ -165,13 +198,16 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
     if (action === "roll") setRolling(true);
     try {
       if (local) {
+        const current = localRef.current;
+        if (!current) return;
         await new Promise(resolve => setTimeout(resolve, action === "roll" ? 650 : 0));
-        if (action === "roll") setLocal(roll(local, local.turn, FACES[randomInt(4)], Date.now(), randomInt(1000)));
-        if (action === "prepare") setLocal(prepare(local, activeSeat, extra.plan as PlanInput));
-        if (action === "hassle_response") setLocal(resolveHassle(local, activeSeat, String(extra.hassleId), String(extra.choice) as HassleChoice));
-        if (action === "event") setLocal(resolveEvent(local, activeSeat, String(extra.eventId), String(extra.choice)));
-        if (action === "debate") setLocal(submitDebate(local, activeSeat, String(extra.debateId), extra.bid as DebateBid | null));
-        if (action === "rematch") setLocal(requestRematch(requestRematch(local, 0), 1));
+        if (localRef.current !== current) return;
+        if (action === "roll") updateLocal(roll(current, activeSeat, FACES[randomInt(4)], Date.now(), randomInt(1000)));
+        if (action === "prepare") updateLocal(prepare(current, activeSeat, extra.plan as PlanInput));
+        if (action === "hassle_response") updateLocal(resolveHassle(current, activeSeat, String(extra.hassleId), String(extra.choice) as HassleChoice));
+        if (action === "event") updateLocal(resolveEvent(current, activeSeat, String(extra.eventId), String(extra.choice)));
+        if (action === "debate") updateLocal(submitDebate(current, activeSeat, String(extra.debateId), extra.bid as DebateBid | null));
+        if (action === "rematch") updateLocal(requestRematch(requestRematch(current, 0), 1));
       } else if (session && snapshot) {
         const [data] = await Promise.all([api(session, { action, version: snapshot.version, ...extra }),
           new Promise(resolve => setTimeout(resolve, action === "roll" ? 650 : 0))]);
@@ -196,7 +232,8 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
   }
   function returnHome() {
     if (lock.current) { notify("请等这一手落定，再回门庭。"); return; }
-    setSession(null); setSnapshot(null); setLocal(null); setModal(null); setDetail(null);
+    if(localRef.current) saveStore(solo ? SOLO_STORE : LOCAL, localRef.current);
+    setSession(null); setSnapshot(null); updateLocal(null); setSolo(false); setModal(null); setDetail(null);
     history.replaceState(null, "", appBase);
   }
   const active = game?.players[activeSeat];
@@ -208,33 +245,38 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         <span className="brand-name">升官图<small>与君对弈 · 共赴青云</small></span>
       </button>
       <nav aria-label="工具">
-        <Soundscape game={isLocal && localDoor!==game?.match+":"+activeSeat ? null : game}/>
+        <Soundscape game={isLocal && !solo && localDoor!==game?.match+":"+activeSeat ? null : game}/>
         <button className="nav-button" onClick={() => setModal("rules")}><BookOpen size={16}/><span>玩法</span></button>
         <button className="nav-button install-nav" onClick={() => setModal("install")}><Download size={16}/><span>放到桌面</span></button>
       </nav>
     </header>
     <main className={inGame ? "mansion-main" : ""}>
       {game ? <PrivateRoom key={game.match+":"+activeSeat} game={game} busy={busy} rolling={rolling} connection={connection} isLocal={isLocal} roomCode={session?.code}
+        soloState={solo ? botPaused ? "paused" : botThinking ? "thinking" : "ready" : undefined} onBotPause={()=>setBotPaused(v=>!v)}
         onMove={(action,extra)=>void move(action,extra)} onDetail={setDetail} onInvite={()=>setModal("invite")} onBackup={()=>setModal("backup")}
-        locked={isLocal&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
+        locked={isLocal&&!solo&&localDoor!==game.match+":"+activeSeat} onUnlock={()=>setLocalDoor(game.match+":"+activeSeat)}/>
       : <><div className="page-intro"><div className="lobby-scene" aria-hidden="true"/><div className="intro-content"><p className="eyebrow"><span/> 双人古风策略棋游</p><h1>一局浮生，<br/><em>与你共赴青云。</em></h1><p className="intro-copy">从一介布衣，到满朝风云。<br/>你我的下一步，会在哪里相逢？</p><div className="intro-features"><span><Users size={13}/>两人远程</span><span><ShieldCheck size={13}/>各藏私账</span><span><Heart size={13}/>随时续局</span></div></div><div className="intro-stamp">山海有期<br/>同游不散</div></div>
         <div className="game-layout lobby-layout"><section className="board-column" aria-label="升官图棋盘"><div className="board-topline"><span>功名 · 地方 · 京官 · 三公</span><button onClick={()=>setModal("rules")}>玩法与改编说明</button></div><ExpandedBoard game={null} activeSeat={0} onDetail={setDetail}/></section>
           <aside className="play-column"><section className="lobby-card">
             <div className="card-overline"><span className="small-line"/> 今夜，与君相约 <span className="small-line"/></div>
-            <h2>棋盘已备，只等你。</h2><p className="muted">一人开局，一人赴约。无需注册。</p>
+            <h2>棋盘已备，只等你。</h2><p className="muted">与知己同游，或独自会一位棋友。</p>
             <div className="tabs" role="tablist" aria-label="入席方式">
               <button role="tab" aria-selected={tab === "create"} className={tab === "create" ? "selected" : ""} onClick={() => setTab("create")}>创建雅间</button>
               <button role="tab" aria-selected={tab === "join"} className={tab === "join" ? "selected" : ""} onClick={() => setTab("join")}>赴约入席</button>
+              <button role="tab" aria-selected={tab === "solo"} className={tab === "solo" ? "selected" : ""} onClick={() => setTab("solo")}>单人对弈</button>
             </div>
-            <form onSubmit={e => { e.preventDefault(); void enter(tab); }}>
+            {tab === "solo" && <div className="solo-intro"><span className="solo-seal">弈</span><div><b>{BOT_NAME}<small>人机棋友</small></b><p>会读书，也懂人情。与你公平争一场功名。</p><span>完整玩法 · 自动应手 · 随时续局</span></div></div>}
+            <form onSubmit={e => { e.preventDefault(); if(tab === "solo")startLocal(false,true); else void enter(tab); }}>
               <label htmlFor="player-name">你的名字</label>
               <input id="player-name" value={name} onChange={e => setName(e.target.value)} maxLength={12} placeholder="写个雅号，也可以是真名" autoComplete="nickname" disabled={busy}/>
               {tab === "join" && <><label htmlFor="room-input">8 位雅间号</label><input id="room-input" className="code-input" value={code} onChange={e => setCode(e.target.value.toUpperCase())} autoCapitalize="characters" autoCorrect="off" spellCheck={false} maxLength={10} placeholder="例如 ABCD 2345" disabled={busy}/></>}
-              <button className="primary-button" disabled={busy || !mounted} type="submit">{busy ? <LoaderCircle className="spin" size={18}/> : <>{tab === "create" ? "开一间雅间" : "入席，同游"}<ArrowRight size={17}/></>}</button>
+              <button className="primary-button" disabled={busy || !mounted} type="submit">{busy ? <LoaderCircle className="spin" size={18}/> : <>{tab === "solo" ? savedSolo ? "新开一局人机对弈" : "与青岚先生对弈" : tab === "create" ? "开一间雅间" : "入席，同游"}<ArrowRight size={17}/></>}</button>
             </form>
-            <p className="privacy-note"><ShieldCheck size={12}/>每间限两人 · 棋局自动保存</p>
-            {githubEdition && <p className="card-footnote">GitHub 网页版 · 与原站共用雅间。<br/>页面能打开但无法入席时，请检查联机服务的网络连接。</p>}
-            {saved && <button className="continue-button" disabled={busy} onClick={() => resume()}><RotateCcw size={14}/>继续上次雅间 <span>{saved.code}</span></button>}
+            <p className="privacy-note"><ShieldCheck size={12}/>{tab === "solo" ? "单人局只保存在当前设备、当前浏览器" : "每间限两人 · 棋局自动保存"}</p>
+            {tab === "solo" && savedSolo && <button className="continue-button" disabled={busy} onClick={()=>startLocal(true,true)}><RotateCcw size={14}/>继续上次单人棋局<ChevronRight size={14}/></button>}
+            {tab === "solo" && <p className="card-footnote">人机不读取你的私账或未揭晓的论策。<br/>{savedSolo ? "新开局会替换上次单人存档；" : ""}联机、同屏与单人存档各自保留。</p>}
+            {tab !== "solo" && githubEdition && <p className="card-footnote">GitHub 网页版 · 与原站共用雅间。<br/>联机暂时连不上时，也可切换单人对弈。</p>}
+            {tab !== "solo" && saved && <button className="continue-button" disabled={busy} onClick={() => resume()}><RotateCcw size={14}/>继续上次雅间 <span>{saved.code}</span></button>}
             <div className="or-divider"><span/>或先试一局<span/></div>
             <details className="local-options"><summary>同屏双人试玩 <Users size={15}/></summary>
               <label htmlFor="partner-name">第二位棋友</label><input id="partner-name" value={partner} onChange={e => setPartner(e.target.value)} maxLength={12} placeholder="青玉客"/>
@@ -252,6 +294,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         <button className="close-modal" aria-label="关闭" autoFocus onClick={() => { setModal(null); setDetail(null); }}><X size={20}/></button>
         {detail !== null ? <><p className="eyebrow">{OFFICES[detail].department} · {OFFICES[detail].stage}</p><h2>{OFFICES[detail].name}</h2><p className="muted">{OFFICES[detail].description}</p>{isPalaceGate(detail)&&<p className="notice">科甲格属于殿试定榜区。首次到达须先完成三轮殿试；下方为取得该科甲后的授官去向，赃不降科甲。会元格作为殿试入口，不单列为最终名次。</p>}<p className="office-scope-note">{exclusiveOffice(detail) ? "高位独占 · " + authorityAt(detail) + "。" + (game?.players.some(p => p.pos === detail) ? "在任：" + game.players.filter(p => p.pos === detail).map(p => p.name).join("、") + "。来者须避位至下一低位。" : "此席空缺。") : "此位可同格；地方官分别视为在不同地方任职，不成立玩家间上下级。"}</p>{detail === HOME_ID ? <div className="notice">仅在太师位掷出「德」，才能荣归。最先荣归的棋友获胜，银两只作此局纪念。</div> : <div className="office-detail">{FACES.map(face => { const a = isPalaceGate(detail) ? appointmentAction(detail,face) : actionsAt(detail)[face]; const dest = OFFICES[a.to]; return <div key={face}><b>{face}</b><button onClick={() => setDetail(a.to)}><span>{a.label}</span><small>{a.to === detail ? "原位" : dest.department + " · " + dest.name} {a.tribute ? "向对手收取，上限 " + a.tribute + " 两" : (a.coins >= 0 ? "+" : "") + a.coins + " 两"}</small></button></div>;})}</div>}<p className="fine-print">此官职银两档位：×{economyAt(detail).multiplier} · 上述金额已按该格换算。</p><div className="evidence-tag">{detail === 0 ? "白丁四项去向：故宫博物院原文可核对" : "逐格升降与银两：本作改编规则"}</div><p className="fine-print">同衙内按本作列序比较高低；不同衙门靠判词跳转，不能用全图编号比较官阶。</p></> :
         modal === "rules" ? <><p className="eyebrow">一卷玩法</p><h2>如何同游？</h2><div className="rules-content">
+          <p><strong>单人对弈。</strong>在门庭选择「单人对弈」，与青岚先生游玩完整棋局。你固定执朱砂，人机执青玉，遵守相同骰面概率、筹谋与升降规则；它只根据自己的私账和公开信息决策，不读取你的嫌疑、政绩或未揭晓论策。人机会自动读书、送礼、掷骰、应试、处理遭遇与廷议；轮到你应对时会等待。府邸右上角可暂停或继续人机，离开页面或查看弹窗时也会暂停。单人局不需要联机服务，保存于当前网站、当前浏览器，清除浏览器数据会丢失；不通过联机密钥转移。单人、同屏和远程存档各自保留，单人新开局会替换上次单人局。</p>
           <p><strong>各自府邸。</strong>每位玩家持自己的续局密钥进入独立视图。银两、学识、政绩、嫌疑、人情、关系网、筹谋种类与考核私账仅本人可见；对方只能看公开官职、掷骰结果和已经发生的互动。对方的廷议投入与得分不公开，结束后仅揭晓论策和胜负。同屏试玩交接时遮挡画面，但共用设备本身不构成联机级别的数据隔离。</p>
           <p><strong>官阶银两。</strong>按任职分为 1–5 档，府邸顶部标出倍数。初仕 ×1，一方任事 ×2，方面要职 ×3，封疆卿辅 ×4，三公 ×5。下面规则中的金额为基础金额，送礼、赈济、办差收入、掷骰赏罚、考核、事件和廷议赏银均乘本人结算前的档位；具体以按钮和仕途预览为准。援手和资助按付款者档位；同衙见礼、孝敬与三公索贿按收取者档位。每次转账双方金额一致，不足只交现有；自省和免费事件选项始终不收费。旧局已有银两不重算。</p>
           <p><strong>全图。</strong>{BOARD_COUNT} 格，{GROUPS.length - 1} 个功名 / 官署分区，加荣归终点。外层是科举和地方衙门，中层是翰林、都察、九卿与六部，中心是内阁与三公。六部在本作分别设署。</p>
@@ -288,7 +331,7 @@ export default function GameClient({ appBase = "/", apiEndpoint = "/api/room", g
         </> :
         modal === "backup" ? <><p className="eyebrow">留一把回来的钥匙</p><h2>你的续局密钥</h2><p className="muted">换手机、浏览器或桌面 App 时，用它找回你的席位。对方入席用邀请链接，不用这把钥匙。</p><code className="recovery-code">{session?.code + "." + session?.token}</code><button className="primary-button" onClick={() => copy(session?.code + "." + session?.token, "续局密钥已复制，请保存到自己的备忘录。")}><Copy size={16}/>复制并自行保存</button><p className="fine-print">持有此密钥的人可以代你落子，请勿发送给他人。</p></> :
         modal === "restore" ? <><p className="eyebrow">旧局未散，等君归来</p><h2>找回你的席位</h2><label htmlFor="recovery">粘贴自己的续局密钥</label><textarea id="recovery" value={recovery} onChange={e => setRecovery(e.target.value)} placeholder="雅间号.续局密钥" rows={4} spellCheck={false}/><button className="primary-button" disabled={busy} onClick={() => { const [c, t] = recovery.trim().split("."); if (!/^[A-Z2-9]{8}$/.test(c || "") || !/^[a-f0-9]{64}$/.test(t || "")) { notify("密钥格式不正确，请完整复制。"); return; } void resume({ code: c, token: t }); }}>回到棋局<ArrowRight size={16}/></button><p className="fine-print">在旧设备府邸右上角，点钥匙图标保存自己的续局密钥。</p></> :
-        modal === "leave" ? <><p className="eyebrow">暂歇片刻</p><h2>回到门庭？</h2><p className="muted">这一局会保留。回来后，点「继续上次{isLocal ? "同屏棋局" : "雅间"}」即可续玩。</p><button className="primary-button" onClick={returnHome}>保存并返回<ArrowLeft size={16}/></button><button className="secondary-button" onClick={() => setModal(null)}>留在棋盘</button></> : null}
+        modal === "leave" ? <><p className="eyebrow">暂歇片刻</p><h2>回到门庭？</h2><p className="muted">这一局会保留。回来后，{solo ? "进入「单人对弈」，" : ""}点「继续上次{solo ? "单人棋局" : isLocal ? "同屏棋局" : "雅间"}」即可续玩。</p><button className="primary-button" onClick={returnHome}>保存并返回<ArrowLeft size={16}/></button><button className="secondary-button" onClick={() => setModal(null)}>留在棋盘</button></> : null}
       </dialog>
     </div>}
   </div>;
